@@ -83,9 +83,9 @@ pub enum Token {
     #[regex("f[Aa][Ll][Ss][Ee]")]
     False,
 
-    // TODO: nexted comments and new lines
+    // Comments - single line and multi-line with nesting support
     #[regex(r"--[^\n]*")]
-    #[regex(r"\(\*[^\n|^\*)]*\*\)")]
+    #[token("(*", comment_multi)]
     Comment,
 
      // operators
@@ -131,4 +131,36 @@ pub enum Token {
 
      #[token("@")]
      TypeId
+}
+
+/// Processes a multi-line comment with support for nesting
+/// Returns true if the comment was properly terminated, false otherwise
+fn comment_multi(lex: &mut logos::Lexer<Token>) -> bool {
+    let remainder = lex.remainder();
+    let mut depth = 1;
+    let mut pos = 0;
+
+    while pos < remainder.len() {
+        // Look for opening or closing comment markers
+        if remainder[pos..].starts_with("(*") {
+            depth += 1;
+            pos += 2;
+        } else if remainder[pos..].starts_with("*)") {
+            depth -= 1;
+            pos += 2;
+            if depth == 0 {
+                // We've found the matching closing comment marker
+                lex.bump(pos);
+                return true;
+            }
+        } else {
+            // Move to the next character
+            pos += 1;
+        }
+    }
+
+    // If we reach here, we had an unclosed comment
+    // We'll consume all the remaining text
+    lex.bump(remainder.len());
+    false
 }
