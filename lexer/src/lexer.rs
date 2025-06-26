@@ -1,7 +1,7 @@
 use logos::{Lexer, Logos, Skip};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(extras = (usize))]
+#[logos(extras = usize)]
 #[logos(skip r"[ \t\r\f]+")]
 #[regex(r"\n", newline_callback)]
 pub enum Token {
