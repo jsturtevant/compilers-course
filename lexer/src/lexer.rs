@@ -209,7 +209,7 @@ mod tests {
 };
 "#;
 
-        let mut lexer = Token::lexer(&hello_world);
+        let mut lexer = Token::lexer(hello_world);
         while let Some(token) = lexer.next() {
             let span = lexer.span();
             match token {

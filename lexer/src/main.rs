@@ -96,9 +96,7 @@ fn main() {
         if args.verbose {
             println!("✓ Successfully lexed '{}'", args.file);
         }
-    } else {
-        if args.verbose {
-            println!("✗ Failed to lex '{}'", args.file);
-        }
+    } else if args.verbose {
+        println!("✗ Failed to lex '{}'", args.file);
     }
 }
