@@ -3,11 +3,11 @@ mod comments_tests;
 mod lexer;
 mod string_tests;
 
+use clap::Parser;
 use lexer::Token;
 use logos::Logos;
 use std::fs;
 use std::path::Path;
-use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "lexer")]
@@ -17,7 +17,7 @@ struct Args {
     /// Input Cool (.cl) file to lex
     #[arg(value_name = "FILE")]
     file: String,
-    
+
     /// Print verbose output including all tokens
     #[arg(short, long)]
     verbose: bool,
@@ -25,7 +25,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    
+
     if !Path::new(&args.file).exists() {
         eprintln!("Error: file '{}' not found", args.file);
         return;
@@ -38,26 +38,31 @@ fn main() {
 
     let mut lexer = Token::lexer(&input);
     let mut success = true;
-    
+
     while let Some(token) = lexer.next() {
         let span = lexer.span();
         match token {
             Ok(t) => {
                 if args.verbose {
-                    println!("Token: {:?}, Span: {:?}, Text: '{}'", t, span, &input[span.clone()]);
+                    println!(
+                        "Token: {:?}, Span: {:?}, Text: '{}'",
+                        t,
+                        span,
+                        &input[span.clone()]
+                    );
                 }
             }
             Err(_) => {
                 success = false;
-                
+
                 // Get line and line start from lexer extras
-                let line_num = lexer.extras.0; 
-                let line_start = lexer.extras.1;            
-                
+                let line_num = lexer.extras.0;
+                let line_start = lexer.extras.1;
+
                 let line_text = input.lines().nth(line_num).unwrap_or("");
                 let col_start = span.start - line_start;
                 let col_end = span.end - line_start;
-                
+
                 // Calculate visual column position by expanding tabs
                 let mut visual_col = 0;
                 for (i, ch) in line_text.char_indices() {
@@ -70,15 +75,15 @@ fn main() {
                         visual_col += 1;
                     }
                 }
-                
+
                 let indicator = " ".repeat(visual_col) + &"^".repeat((col_end - col_start).max(1));
-                
+
                 eprintln!(
                     "Error lexing '{}': '{}' at {:?} on line {} column {}\n\n{}\n{}\n",
                     args.file,
                     &input[span.clone()],
                     span,
-                    line_num + 1, // 1-indexed for display
+                    line_num + 1,  // 1-indexed for display
                     col_start + 1, // 1-indexed for display
                     line_text,
                     indicator
@@ -86,7 +91,7 @@ fn main() {
             }
         }
     }
-    
+
     if success {
         if args.verbose {
             println!("✓ Successfully lexed '{}'", args.file);

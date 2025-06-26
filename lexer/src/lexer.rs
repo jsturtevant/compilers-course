@@ -157,7 +157,7 @@ pub enum Token {
 
 fn newline_callback(lex: &mut Lexer<Token>) -> Skip {
     lex.extras.0 += 1;
-    lex.extras.1 = lex.span().start +1;
+    lex.extras.1 = lex.span().start + 1;
     Skip
 }
 
@@ -232,7 +232,11 @@ mod tests {
             }
         }
 
-        assert_eq!(lexer.extras.0, 5, "Expected 5 lines, got {}", lexer.extras.0);
+        assert_eq!(
+            lexer.extras.0, 5,
+            "Expected 5 lines, got {}",
+            lexer.extras.0
+        );
     }
 
     #[test]
