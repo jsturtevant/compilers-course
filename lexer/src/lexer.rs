@@ -1,7 +1,7 @@
 use logos::{Lexer, Logos, Skip};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(extras = usize)]
+#[logos(extras = (usize, usize))]
 #[logos(skip r"[ \t\r\f]+")]
 #[regex(r"\n", newline_callback)]
 pub enum Token {
@@ -156,7 +156,8 @@ pub enum Token {
 }
 
 fn newline_callback(lex: &mut Lexer<Token>) -> Skip {
-    lex.extras += 1;
+    lex.extras.0 += 1;
+    lex.extras.1 = lex.span().start +1;
     Skip
 }
 
@@ -231,7 +232,7 @@ mod tests {
             }
         }
 
-        assert_eq!(lexer.extras, 5, "Expected 5 lines, got {}", lexer.extras);
+        assert_eq!(lexer.extras.0, 5, "Expected 5 lines, got {}", lexer.extras.0);
     }
 
     #[test]
@@ -254,7 +255,7 @@ mod tests {
                         match token {
                             Ok(_) => {}
                             Err(_) => {
-                                let line = lexer.extras;
+                                let line = lexer.extras.0;
                                 assert!(
                                     false,
                                     "error lexing {:?}: '{:?}' at {:?} on line {}\n\n{}\n\n",
