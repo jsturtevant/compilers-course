@@ -148,6 +148,9 @@ pub enum Token {
     #[token(".")]
     Dot,
 
+    #[token(",")]
+    Comma,
+
     #[regex(r"\n", newline_callback)]
     Newline,
 }
@@ -249,26 +252,17 @@ mod tests {
                     while let Some(token) = lexer.next() {
                         let span = lexer.span();
                         match token {
-                            Ok(token) => println!(
-                                "{:#?} with value {:?} on line {}",
-                                token,
-                                &input[span.clone()],
-                                lexer.extras
-                            ),
+                            Ok(_) => {}
                             Err(_) => {
                                 let line = lexer.extras;
-                                eprintln!(
-                                    "lexer error lexing '{:?}' at {:?} on line {}",
-                                    &input[span.clone()],
-                                    span,
-                                    line
-                                );
                                 assert!(
                                     false,
-                                    "lexer error lexing '{:?}' at {:?} on line {}",
+                                    "error lexing {:?}: '{:?}' at {:?} on line {}\n\n{}\n\n",
+                                    p,
                                     &input[span.clone()],
                                     span,
-                                    line
+                                    line,
+                                    input.lines().nth(line).unwrap()
                                 );
                             }
                         }
