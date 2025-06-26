@@ -2,7 +2,7 @@
 mod test {
     use crate::lexer::Token;
     use logos::Logos;
-    
+
     #[test]
     fn test_true() {
         let mut lex = Token::lexer("true");

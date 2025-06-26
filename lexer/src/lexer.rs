@@ -1,7 +1,9 @@
-use logos::Logos;
+use logos::{Lexer, Logos, Skip};
 
-#[derive(Logos, Debug, PartialEq)]
-#[logos(skip r"[  \v\r\t\n\f]+")] // Ignore this regex pattern between tokens
+#[derive(Logos, Debug, PartialEq, Clone)]
+#[logos(extras = (usize, usize))]
+#[logos(skip r"[ \n\t\r\f]+")]
+#[regex(r"\n", newline_callback)]
 pub enum Token {
     // integers
     #[regex(r"[0-9]+")]
@@ -22,7 +24,7 @@ pub enum Token {
     #[token("SELF_TYPE")]
     SelfType,
 
-    #[regex(r#""([^"\\n]|[\t\f\\])*""#)]
+    #[regex(r#""([^"\\\n]|\\[^0\n]|\\[ \t]*\n)*""#)]
     String,
 
     // keywords
@@ -88,49 +90,69 @@ pub enum Token {
     #[token("(*", comment_multi)]
     Comment,
 
-     // operators
-     #[token("+")]
-     Plus,
- 
-     #[token("-")]
-     Minus,
- 
-     #[token("*")]
-     Multiply,
- 
-     #[token("/")]
-     Divide,
- 
-     #[token("~")]
-     Tilde,
- 
-     #[token("<")]
-     LessThan,
- 
-     #[token("<=")]
-     LessThanOrEqual,
- 
-     #[token("=")]
-     Equal,
- 
-     // special characters
-     #[token("(")]
-     LeftParen,
- 
-     #[token(")")]
-     RightParen,
- 
-     #[token("=>")]
-     DoubleArrow,
- 
-     #[token("<-")]
-     Assign,
+    // operators
+    #[token("+")]
+    Plus,
 
-     #[token(":")]
-     Identify,
+    #[token("-")]
+    Minus,
 
-     #[token("@")]
-     TypeId
+    #[token("*")]
+    Multiply,
+
+    #[token("/")]
+    Divide,
+
+    #[token("~")]
+    Tilde,
+
+    #[token("<")]
+    LessThan,
+
+    #[token("<=")]
+    LessThanOrEqual,
+
+    #[token("=")]
+    Equal,
+
+    // special characters
+    #[token("(")]
+    LeftParen,
+
+    #[token(")")]
+    RightParen,
+
+    #[token("=>")]
+    DoubleArrow,
+
+    #[token("<-")]
+    Assign,
+
+    #[token(":")]
+    Identify,
+
+    #[token("@")]
+    TypeId,
+
+    // brackets and braces
+    #[token("{")]
+    LeftBrace,
+
+    #[token("}")]
+    RightBrace,
+
+    // punctuation
+    #[token(";")]
+    Semicolon,
+
+    #[token(".")]
+    Dot,
+}
+
+fn newline_callback(lex: &mut Lexer<Token>) -> Skip {
+    lex.extras.0 += 1;
+    lex.extras.1 = lex.span().end;
+    Skip
 }
 
 /// Processes a multi-line comment with support for nesting
@@ -163,4 +185,86 @@ fn comment_multi(lex: &mut logos::Lexer<Token>) -> bool {
     // We'll consume all the remaining text
     lex.bump(remainder.len());
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use logos::Logos;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn test_lexer_simple() {
+        let hello_world = r#"class Main inherits IO {
+   main(): SELF_TYPE {
+	out_string("Hello, World.\n")
+   };
+};
+"#;
+
+        let lexer = Token::lexer(&hello_world);
+
+        for (token, span) in lexer.spanned() {
+            match token {
+                Ok(t) => {
+                    println!(
+                        "Token: {:?}, Span: {:?}, Text: '{}'",
+                        t,
+                        span,
+                        &hello_world[span.clone()]
+                    );
+                }
+                Err(_) => {
+                    println!(
+                        "Failed to match at span {:?}, Text: '{}'",
+                        span,
+                        &hello_world[span.clone()]
+                    );
+                    assert!(false, "unmatched item at span {:?}", span);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_lexer_on_cl_files() {
+        let folder_path = "../samples";
+        assert!(Path::new(folder_path).exists());
+
+        // Read all files in the directory
+        for f in fs::read_dir(folder_path).unwrap() {
+            let entry = f.unwrap();
+            let p = entry.path();
+            if let Some(extension) = p.extension() {
+                if extension == "cl" {
+                    println!("Lexing file: {:?}", p);
+                    let input = fs::read_to_string(&p).expect("Failed to read file");
+
+                    let lexer = Token::lexer(&input);
+                    let cloned_lexer = lexer.clone();
+                    for (token, span) in cloned_lexer.spanned() {
+                        match token {
+                            Ok(token) => println!(
+                                "{:#?} with value {:?} on line {:?}",
+                                token,
+                                &input[span.clone()],
+                                lexer.extras
+                            ),
+                            Err(_) => {
+                                let l = lexer.extras;
+                                assert!(
+                                    false,
+                                    "lexer error lexing '{:?}' at {:?} on line {:?}",
+                                    &input[span.clone()],
+                                    span,
+                                    l
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

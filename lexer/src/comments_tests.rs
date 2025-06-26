@@ -63,14 +63,21 @@ mod tests {
     fn test_nested_comments_one_level() {
         let mut lex = Token::lexer("(* outer comment (* nested comment *) still outer *)");
         assert_eq!(lex.next(), Some(Ok(Token::Comment)));
-        assert_eq!(lex.slice(), "(* outer comment (* nested comment *) still outer *)");
+        assert_eq!(
+            lex.slice(),
+            "(* outer comment (* nested comment *) still outer *)"
+        );
     }
 
     #[test]
     fn test_nested_comments_multiple_levels() {
-        let mut lex = Token::lexer("(* level 1 (* level 2 (* level 3 *) more level 2 *) more level 1 *)");
+        let mut lex =
+            Token::lexer("(* level 1 (* level 2 (* level 3 *) more level 2 *) more level 1 *)");
         assert_eq!(lex.next(), Some(Ok(Token::Comment)));
-        assert_eq!(lex.slice(), "(* level 1 (* level 2 (* level 3 *) more level 2 *) more level 1 *)");
+        assert_eq!(
+            lex.slice(),
+            "(* level 1 (* level 2 (* level 3 *) more level 2 *) more level 1 *)"
+        );
     }
 
     #[test]
@@ -82,9 +89,13 @@ mod tests {
 
     #[test]
     fn test_nested_comments_with_newlines() {
-        let mut lex = Token::lexer("(* Outer comment\n   (* Nested\n      comment *)\n   More outer\n*)");
+        let mut lex =
+            Token::lexer("(* Outer comment\n   (* Nested\n      comment *)\n   More outer\n*)");
         assert_eq!(lex.next(), Some(Ok(Token::Comment)));
-        assert_eq!(lex.slice(), "(* Outer comment\n   (* Nested\n      comment *)\n   More outer\n*)");
+        assert_eq!(
+            lex.slice(),
+            "(* Outer comment\n   (* Nested\n      comment *)\n   More outer\n*)"
+        );
     }
 
     #[test]
@@ -107,4 +118,16 @@ mod tests {
         assert_eq!(lex.next(), Some(Ok(Token::If)));
     }
 
+    #[test]
+    fn test_nested_comments_with_newlines_raw() {
+        let comment = r#"
+    (* Outer comment
+       (* Nested comment *) 
+       * More outer
+    *)
+"#;
+
+        let mut lex = Token::lexer(comment);
+        assert_eq!(lex.next(), Some(Ok(Token::Comment)));
+    }
 }
