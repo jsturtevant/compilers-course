@@ -1,8 +1,8 @@
 use logos::{Lexer, Logos, Skip};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(extras = (usize, usize))]
-#[logos(skip r"[ \n\t\r\f]+")]
+#[logos(extras = (usize))]
+#[logos(skip r"[ \t\r\f]+")]
 #[regex(r"\n", newline_callback)]
 pub enum Token {
     // integers
@@ -147,11 +147,13 @@ pub enum Token {
 
     #[token(".")]
     Dot,
+
+    #[regex(r"\n", newline_callback)]
+    Newline,
 }
 
 fn newline_callback(lex: &mut Lexer<Token>) -> Skip {
-    lex.extras.0 += 1;
-    lex.extras.1 = lex.span().end;
+    lex.extras += 1;
     Skip
 }
 
@@ -203,9 +205,9 @@ mod tests {
 };
 "#;
 
-        let lexer = Token::lexer(&hello_world);
-
-        for (token, span) in lexer.spanned() {
+        let mut lexer = Token::lexer(&hello_world);
+        while let Some(token) = lexer.next() {
+            let span = lexer.span();
             match token {
                 Ok(t) => {
                     println!(
@@ -225,6 +227,8 @@ mod tests {
                 }
             }
         }
+
+        assert_eq!(lexer.extras, 5, "Expected 5 lines, got {}", lexer.extras);
     }
 
     #[test]
@@ -241,24 +245,30 @@ mod tests {
                     println!("Lexing file: {:?}", p);
                     let input = fs::read_to_string(&p).expect("Failed to read file");
 
-                    let lexer = Token::lexer(&input);
-                    let cloned_lexer = lexer.clone();
-                    for (token, span) in cloned_lexer.spanned() {
+                    let mut lexer = Token::lexer(&input);
+                    while let Some(token) = lexer.next() {
+                        let span = lexer.span();
                         match token {
                             Ok(token) => println!(
-                                "{:#?} with value {:?} on line {:?}",
+                                "{:#?} with value {:?} on line {}",
                                 token,
                                 &input[span.clone()],
                                 lexer.extras
                             ),
                             Err(_) => {
-                                let l = lexer.extras;
-                                assert!(
-                                    false,
-                                    "lexer error lexing '{:?}' at {:?} on line {:?}",
+                                let line = lexer.extras;
+                                eprintln!(
+                                    "lexer error lexing '{:?}' at {:?} on line {}",
                                     &input[span.clone()],
                                     span,
-                                    l
+                                    line
+                                );
+                                assert!(
+                                    false,
+                                    "lexer error lexing '{:?}' at {:?} on line {}",
+                                    &input[span.clone()],
+                                    span,
+                                    line
                                 );
                             }
                         }
