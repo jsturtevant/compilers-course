@@ -227,7 +227,7 @@ mod tests {
                         span,
                         &hello_world[span.clone()]
                     );
-                    assert!(false, "unmatched item at span {:?}", span);
+                    panic!("unmatched item at span {:?}", span);
                 }
             }
         }
@@ -260,8 +260,7 @@ mod tests {
                             Ok(_) => {}
                             Err(_) => {
                                 let line = lexer.extras.0;
-                                assert!(
-                                    false,
+                                panic!(
                                     "error lexing {:?}: '{:?}' at {:?} on line {}\n\n{}\n\n",
                                     p,
                                     &input[span.clone()],
