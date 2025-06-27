@@ -15,7 +15,7 @@ use std::path::Path;
 #[command(version)]
 struct Args {
     /// Input Cool (.cl) file to lex
-    #[arg(value_name = "FILE")]
+    #[arg(value_name = "FILE|DIRECTORY")]
     file: String,
 
     /// Print verbose output including all tokens
@@ -23,18 +23,11 @@ struct Args {
     verbose: bool,
 }
 
-fn main() {
-    let args = Args::parse();
-
-    if !Path::new(&args.file).exists() {
-        eprintln!("Error: file '{}' not found", args.file);
-        return;
+fn lex_file(file_path: &Path, verbose: bool) {
+    if verbose {
+        println!("Lexing file: {}", file_path.display());
     }
-
-    if args.verbose {
-        println!("Lexing file: {}", args.file);
-    }
-    let input = fs::read_to_string(&args.file).expect("Failed to read file");
+    let input = fs::read_to_string(file_path).expect("Failed to read file");
 
     let mut lexer = Token::lexer(&input);
     let mut success = true;
@@ -43,7 +36,7 @@ fn main() {
         let span = lexer.span();
         match token {
             Ok(t) => {
-                if args.verbose {
+                if verbose {
                     println!(
                         "Token: {:?}, Span: {:?}, Text: '{}'",
                         t,
@@ -80,7 +73,7 @@ fn main() {
 
                 eprintln!(
                     "Error lexing '{}': '{}' at {:?} on line {} column {}\n\n{}\n{}\n",
-                    args.file,
+                    file_path.display(),
                     &input[span.clone()],
                     span,
                     line_num + 1,  // 1-indexed for display
@@ -92,11 +85,41 @@ fn main() {
         }
     }
 
-    if success {
-        if args.verbose {
-            println!("✓ Successfully lexed '{}'", args.file);
+    if verbose {
+        if success {
+            println!("✓ Successfully lexed '{}'", file_path.display());
+
+        }else {
+            println!("✗ Failed to lex '{}'", file_path.display());
         }
-    } else if args.verbose {
-        println!("✗ Failed to lex '{}'", args.file);
+    }
+}
+
+fn main() {
+    let args = Args::parse();
+    let path = Path::new(&args.file);
+
+    if !path.exists() {
+        eprintln!("Error: file or directory '{}' not found", args.file);
+        return;
+    }
+
+    if path.is_dir() {
+        if args.verbose {
+            println!("Lexing all .cl files in directory: {}", args.file);
+        }
+        for entry in fs::read_dir(path).expect("Failed to read directory") {
+            let entry = entry.expect("Failed to read directory entry");
+            let file_path = entry.path();
+            if file_path.is_file() {
+                if let Some(ext) = file_path.extension() {
+                    if ext == "cl" {
+                        lex_file(&file_path, args.verbose);
+                    }
+                }
+            }
+        }
+    } else {
+        lex_file(path, args.verbose);
     }
 }
