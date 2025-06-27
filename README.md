@@ -5,6 +5,7 @@ A collection of compiler implementation projects for a compilers course, focusin
 ## Projects
 
 - **[lexer/](lexer/)** - Lexical analyzer for COOL language built with Rust and logos
+- **[parser/](parser/)** - Parser for COOL language using Chumsky parser combinators
 
 ## Getting Started
 
