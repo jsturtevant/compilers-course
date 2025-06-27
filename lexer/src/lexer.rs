@@ -5,6 +5,8 @@ use logos::{Lexer, Logos, Skip};
 #[logos(skip r"[ \t\r\f]+")]
 #[regex(r"\n", newline_callback)]
 pub enum Token {
+    Error,
+
     // integers
     #[regex(r"[0-9]+")]
     Integer,

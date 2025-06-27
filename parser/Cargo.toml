@@ -1,0 +1,10 @@
+[package]
+name = "parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexer = { path = "../lexer" }
+chumsky = "0.10.0" 
+ariadne = "0.5.1"
+logos = "0.15" 

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "lexer",
+    "parser"
+]
+resolver = "3"
