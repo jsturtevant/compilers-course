@@ -54,10 +54,52 @@ where
     let type_id = select! { Token::TypeIdentifier(s) => s, Token::SelfType => "SELF_TYPE".to_string() };
 
     let expr = recursive(|expr| {
+        let new_expr = just(Token::New)
+            .ignore_then(type_id)
+            .map(ast::Expr::New);
+
+        let block = expr
+            .clone()
+            .separated_by(choice((just(Token::Dot), just(Token::Semicolon))))
+            .allow_trailing()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
+            .map(ast::Expr::Block);
+
         let atom = choice((
             select! { Token::String(s) => ast::Expr::String(s) },
+            select! { Token::Integer(i) => ast::Expr::Integer(i) },
+            just(Token::Isvoid)
+                .ignore_then(expr.clone())
+                .map(|e| ast::Expr::IsVoid(Box::new(e))),
+            just(Token::SelfLit).to(ast::Expr::Id("self".to_string())),
             ident.map(ast::Expr::Id),
+            new_expr,
+            block,
+            expr.clone()
+                .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
         ));
+
+        let term = atom.foldl(
+            just(Token::Dot)
+                .ignore_then(ident)
+                .then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+                )
+                .map(|(method, args)| (method, args))
+                .repeated(),
+            |expr, (method, args)| ast::Expr::Dispatch {
+                expr: Box::new(expr),
+                static_type: None,
+                method,
+                args,
+            },
+        );
 
         let call = ident
             .then(
@@ -69,27 +111,7 @@ where
             )
             .map(|(name, args)| ast::Expr::FuncCall { name, args });
 
-        let dispatch = atom
-            .then(
-                just(Token::Dot)
-                    .ignore_then(ident)
-                    .then(
-                        expr.clone()
-                            .separated_by(just(Token::Comma))
-                            .allow_trailing()
-                            .collect::<Vec<_>>()
-                            .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-                    )
-                    .map(|(method, args)| (method, args)),
-            )
-            .map(|(expr, (method, args))| ast::Expr::Dispatch {
-                expr: Box::new(expr),
-                static_type: None,
-                method,
-                args,
-            });
-
-        choice((dispatch, call, atom))
+        choice((call, term))
     });
 
     let formal = ident
