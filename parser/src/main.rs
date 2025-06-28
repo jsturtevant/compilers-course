@@ -51,7 +51,7 @@ where
     I: ValueInput<'tokens, Token = Token, Span = SimpleSpan>,
 {
     let ident = select! { Token::ObjectIdentifier(s) => s };
-    let type_id = select! { Token::TypeIdentifier(s) => s };
+    let type_id = select! { Token::TypeIdentifier(s) => s, Token::SelfType => "SELF_TYPE".to_string() };
 
     let expr = recursive(|expr| {
         let atom = choice((
