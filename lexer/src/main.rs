@@ -88,8 +88,7 @@ fn lex_file(file_path: &Path, verbose: bool) {
     if verbose {
         if success {
             println!("✓ Successfully lexed '{}'", file_path.display());
-
-        }else {
+        } else {
             println!("✗ Failed to lex '{}'", file_path.display());
         }
     }

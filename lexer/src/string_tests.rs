@@ -6,22 +6,23 @@ mod tests {
     #[test]
     fn test_simple_string() {
         let mut lexer = Token::lexer(r#""Hello, World!""#);
-        assert_eq!(lexer.next(), Some(Ok(Token::String)));
+        let result = lexer.next();
+        assert!(matches!(result, Some(Ok(Token::String(_)))));
     }
-
     #[test]
     fn test_crazy_string() {
         let mut lexer = Token::lexer(r#""Hello,\ test *!&@#^@$*(!&$) World!""#);
-        assert_eq!(lexer.next(), Some(Ok(Token::String)));
+        let result = lexer.next();
+        assert!(matches!(result, Some(Ok(Token::String(_)))));
     }
-
     #[test]
     fn test_valid_string() {
         let mut lexer = Token::lexer(
             r#""This \ 
  is OK""#,
         );
-        assert_eq!(lexer.next(), Some(Ok(Token::String)));
+        let result = lexer.next();
+        assert!(matches!(result, Some(Ok(Token::String(_)))));
     }
 
     #[test]
@@ -42,6 +43,7 @@ mod tests {
     #[test]
     fn test_string_with_newline() {
         let mut lexer = Token::lexer(r#""This string contains a newline character \n""#);
-        assert_eq!(lexer.next(), Some(Ok(Token::String)));
+        let result = lexer.next();
+        assert!(matches!(result, Some(Ok(Token::String(_)))));
     }
 }

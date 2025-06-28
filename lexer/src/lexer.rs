@@ -1,23 +1,25 @@
 use logos::{Lexer, Logos, Skip};
+use std::fmt;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(extras = (usize, usize))]
 #[logos(skip r"[ \t\r\f]+")]
 #[regex(r"\n", newline_callback)]
 pub enum Token {
+    #[allow(dead_code)]
     Error,
 
     // integers
-    #[regex(r"[0-9]+")]
-    Integer,
+    #[regex(r"[0-9]+", callback = |lex| lex.slice().parse::<i32>().ok())]
+    Integer(i32),
 
     // type identifiers (begin with a capital letter)
-    #[regex(r"[A-Z][A-Za-z0-9_]*")]
-    TypeIdentifier,
+    #[regex(r"[A-Z][A-Za-z0-9_]*", callback = |lex| lex.slice().to_string())]
+    TypeIdentifier(String),
 
     // object identifiers (begin with a lower case letter)
-    #[regex(r"[a-z][A-Za-z0-9_]*")]
-    ObjectIdentifier,
+    #[regex(r"[a-z][A-Za-z0-9_]*", callback = |lex| lex.slice().to_string())]
+    ObjectIdentifier(String),
 
     // special identifiers
     #[token("self")]
@@ -26,8 +28,8 @@ pub enum Token {
     #[token("SELF_TYPE")]
     SelfType,
 
-    #[regex(r#""([^"\\\n]|\\[^0\n]|\\[ \t]*\n)*""#)]
-    String,
+    #[regex(r#""([^"\\\n]|\\[^0\n]|\\[ \t]*\n)*""#, callback = |lex| lex.slice().to_string())]
+    String(String),
 
     // keywords
     #[token("class", ignore(case))]
@@ -131,7 +133,7 @@ pub enum Token {
     Assign,
 
     #[token(":")]
-    Identify,
+    Colon,
 
     #[token("@")]
     TypeId,
@@ -193,6 +195,60 @@ fn comment_multi(lex: &mut logos::Lexer<Token>) -> bool {
     // We'll consume all the remaining text
     lex.bump(remainder.len());
     false
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::Error => write!(f, "Error"),
+            Token::Integer(i) => write!(f, "{i}"),
+            Token::TypeIdentifier(id) => write!(f, "{id}"),
+            Token::ObjectIdentifier(id) => write!(f, "{id}"),
+            Token::SelfLit => write!(f, "self"),
+            Token::SelfType => write!(f, "SELF_TYPE"),
+            Token::String(s) => write!(f, "{s}"),
+            Token::Class => write!(f, "class"),
+            Token::Else => write!(f, "else"),
+            Token::Fi => write!(f, "fi"),
+            Token::If => write!(f, "if"),
+            Token::In => write!(f, "in"),
+            Token::Inherits => write!(f, "inherits"),
+            Token::Isvoid => write!(f, "isvoid"),
+            Token::Let => write!(f, "let"),
+            Token::Loop => write!(f, "loop"),
+            Token::Pool => write!(f, "pool"),
+            Token::Then => write!(f, "then"),
+            Token::While => write!(f, "while"),
+            Token::Case => write!(f, "case"),
+            Token::Esac => write!(f, "esac"),
+            Token::New => write!(f, "new"),
+            Token::Of => write!(f, "of"),
+            Token::Not => write!(f, "not"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::Plus => write!(f, "+"),
+            Token::Minus => write!(f, "-"),
+            Token::Assign => write!(f, "<-"),
+            Token::Comma => write!(f, ","),
+            Token::Semicolon => write!(f, ";"),
+            Token::Dot => write!(f, "."),
+            Token::Comment => write!(f, "Comment"),
+            Token::Multiply => write!(f, "*"),
+            Token::Divide => write!(f, "/"),
+            Token::Tilde => write!(f, "~"),
+            Token::LessThan => write!(f, "<"),
+            Token::LessThanOrEqual => write!(f, "<="),
+            Token::Equal => write!(f, "="),
+            Token::LeftParen => write!(f, "("),
+            Token::RightParen => write!(f, ")"),
+            Token::DoubleArrow => write!(f, "=>"),
+            Token::Colon => write!(f, ":"),
+            Token::TypeId => write!(f, "@"),
+            Token::LeftBrace => write!(f, "{{"),
+            Token::RightBrace => write!(f, "}}"),
+            Token::Newline => writeln!(f),
+        }
+    }
 }
 
 #[cfg(test)]
