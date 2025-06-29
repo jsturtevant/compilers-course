@@ -89,18 +89,18 @@ where
                     .collect(),
             )
             .then_ignore(just(Token::In))
-            .then(expr.clone())
+            .then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .map(|(bindings, body)| ast::Expr::Let {
                 bindings,
                 body: Box::new(body),
             });
 
         let if_expr = just(Token::If)
-            .ignore_then(expr.clone())
+            .ignore_then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Then))
-            .then(expr.clone())
+            .then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Else))
-            .then(expr.clone())
+            .then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Fi))
             .map(|((cond, then_branch), else_branch)| ast::Expr::If {
                 cond: Box::new(cond),
@@ -109,9 +109,9 @@ where
             });
 
         let while_expr = just(Token::While)
-            .ignore_then(expr.clone())
+            .ignore_then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Loop))
-            .then(expr.clone())
+            .then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Pool))
             .map(|(cond, body)| ast::Expr::While {
                 cond: Box::new(cond),
@@ -126,7 +126,7 @@ where
             .map(|((name, typ), expr)| ast::CaseBranch { name, typ, expr });
 
         let case_expr = just(Token::Case)
-            .ignore_then(expr.clone())
+            .ignore_then(expr.clone().padded_by(just(Token::Comment).repeated()))
             .then_ignore(just(Token::Of))
             .then(
                 case_branch
@@ -219,6 +219,7 @@ where
 
         let multiplicative = unary.clone().foldl(
             choice((just(Token::Multiply), just(Token::Divide)))
+                .padded_by(just(Token::Comment).repeated())
                 .then(unary.clone())
                 .repeated(),
             |lhs, (op, rhs)| match op {
@@ -230,6 +231,7 @@ where
 
         let additive = multiplicative.clone().foldl(
             choice((just(Token::Plus), just(Token::Minus)))
+                .padded_by(just(Token::Comment).repeated())
                 .then(multiplicative.clone())
                 .repeated(),
             |lhs, (op, rhs)| match op {
@@ -245,6 +247,7 @@ where
                 just(Token::LessThanOrEqual),
                 just(Token::Equal),
             ))
+            .padded_by(just(Token::Comment).repeated())
             .then(additive.clone())
             .repeated(),
             |lhs, (op, rhs)| match op {
