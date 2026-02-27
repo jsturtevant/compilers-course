@@ -261,3 +261,128 @@ Sample files include:
 **Production Readiness:** Parser is functionally complete and ready for semantic analysis phase.
 
 ---
+
+## Semantic Analysis Implementation (2026-02-27)
+
+### Semant Crate Structure Created
+
+**Task:** Implement type checker for semantic analysis phase
+
+**Implementation Status:** ✅ COMPLETE
+
+### Module Structure
+
+Created three core modules in `semant/src/`:
+
+1. **symbol_table.rs** (135 lines, 7 tests)
+   - `ScopeStack` structure for managing nested scopes
+   - `push_scope()` / `pop_scope()` for let, case, method bodies
+   - `lookup_variable(name) -> Option<Type>` - searches from innermost scope outward
+   - `add_variable(name, type) -> Result<(), Error>` - adds to current scope with duplicate detection
+   - `add_self(class_name)` - binds `self` to current class type
+   - Protection against popping root scope
+
+2. **class_hierarchy.rs** (400+ lines, 10 tests)
+   - `ClassTable` maps class names to ClassInfo
+   - `synthesize_builtins()` - creates Object, IO, String, Int, Bool with all methods per COOL spec
+   - `build(classes)` - validates and adds user-defined classes
+   - `check_cycles()` - detects inheritance cycles and undefined parents
+   - `validate_inheritance()` - ensures no inheritance from Int/Bool/String
+   - `conforms_to(child, parent) -> bool` - type conformance checking
+   - `least_upper_bound(t1, t2) -> Type` - for if/case expression type joining
+   - `get_method(class, method)` - retrieves method info including inherited methods
+
+3. **types.rs** (450+ lines, 12 tests)
+   - `Type` enum: Class(String), SelfType, NoType
+   - `TypeChecker` - walks AST and infers expression types
+   - Handles all COOL expression types:
+     - Literals: Integer, String, Bool
+     - Arithmetic: Plus, Minus, Times, Divide
+     - Comparison: Lt, Le, Eq
+     - Logic: Not, IsVoid
+     - Control flow: If, While, Let, Case, Block
+     - OOP: Dispatch, FuncCall, New, Assign
+   - `check_conformance()` - validates type assignments
+   - Proper SELF_TYPE handling throughout
+
+### Built-in Classes (per COOL spec)
+
+All five built-in classes synthesized with correct method signatures:
+
+**Object:**
+- abort(): Object
+- type_name(): String
+- copy(): SELF_TYPE
+
+**IO (inherits Object):**
+- out_string(x: String): SELF_TYPE
+- out_int(x: Int): SELF_TYPE
+- in_string(): String
+- in_int(): Int
+
+**String (inherits Object):**
+- length(): Int
+- concat(s: String): String
+- substr(i: Int, l: Int): String
+
+**Int, Bool (inherit Object):** No additional methods
+
+### Test Coverage
+
+**29 total tests, all passing:**
+- Symbol table: 7 tests (scoping, shadowing, self binding)
+- Class hierarchy: 10 tests (builtins, conformance, LUB, inheritance validation, cycles)
+- Type checker: 12 tests (literals, operators, control flow, undefined variables)
+
+**Validated behaviors:**
+- Scope nesting and variable shadowing work correctly
+- Method inheritance follows class hierarchy
+- Type conformance respects inheritance
+- LUB (least upper bound) correctly joins branch types in if/case
+- Cycle detection prevents invalid inheritance graphs
+- Cannot inherit from Int, Bool, String
+- Undefined parent classes detected
+- All arithmetic/comparison operators type-check correctly
+- SELF_TYPE handled specially in conformance checks
+
+### Integration with Parser
+
+- Semant crate depends on parser crate for AST types
+- `SemanticAnalyzer` is the main entry point: `analyze(program: &Program)`
+- Three-phase analysis:
+  1. Build class hierarchy
+  2. Check for cycles and invalid inheritance
+  3. Type check all class features and expressions
+
+### Key Design Decisions
+
+1. **Scope management via stack:** Simple and efficient for nested scopes in let/case/methods
+2. **Symbol table separate from class hierarchy:** Clean separation of concerns
+3. **Method lookup walks inheritance chain:** Supports proper method inheritance and overriding
+4. **LUB for branch types:** If/case expressions have type = LUB of all branches
+5. **SELF_TYPE as special type:** Distinct from Class types, only conforms to itself
+6. **Error collection:** All phases collect errors and return Vec<SemanticError> for batch reporting
+
+### Files Created
+
+- `semant/Cargo.toml` - depends on parser crate
+- `semant/src/lib.rs` - public API and SemanticAnalyzer
+- `semant/src/symbol_table.rs` - scope stack implementation
+- `semant/src/class_hierarchy.rs` - inheritance validation
+- `semant/src/types.rs` - type checker
+
+### Commands Verified
+
+```bash
+cargo check -p semant    # ✅ Compiles cleanly
+cargo test -p semant     # ✅ 29/29 tests pass
+```
+
+### Next Steps
+
+- Add line number tracking to AST for better error messages
+- Implement Stanford semant output format (`--stanford` flag)
+- Test against Stanford sample programs
+- Add error recovery (continue checking after first error)
+
+---

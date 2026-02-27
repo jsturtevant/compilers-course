@@ -339,3 +339,73 @@ lexer program.cl              # → token stream
 5. Add test harness that validates end-to-end (source → asm with expected output)
 
 ---
+
+### 2026-02-27: Semantic Analysis Architecture Design
+
+**Task:** Design and implement the semantic analysis crate structure for Phase 2 of the COOL compiler.
+
+**Architecture Created:**
+
+1. **`semant/` Crate Structure:**
+   - `src/lib.rs` - Main analyzer with three-phase pipeline
+   - `src/symbol_table.rs` - Scope stack for variable/method bindings
+   - `src/class_hierarchy.rs` - Inheritance graph with built-in class synthesis
+   - `src/types.rs` - Type representation and conformance checking
+
+2. **Three-Phase Analysis Pipeline:**
+   - Phase 1: Build class hierarchy (detect duplicates, validate inheritance)
+   - Phase 2: Detect cyclic inheritance
+   - Phase 3: Type checking (delegated to Hopper for implementation)
+
+3. **Built-in Classes Synthesized:**
+   - Object (root): abort(), type_name(), copy()
+   - IO: out_string(), out_int(), in_string(), in_int()
+   - String: length(), concat(), substr()
+   - Int, Bool: inherit from Object
+
+4. **Key Design Decisions:**
+   - **Scope Stack:** Reused existing ScopeStack implementation (push/pop scopes, variable lookup with shadowing)
+   - **Type System:** Type enum with Class, SelfType, NoType variants
+   - **Conformance:** Implemented as hierarchy traversal (subtype checking)
+   - **LUB (Least Upper Bound):** Finds common ancestor for case expressions
+   - **Error Recovery:** SemanticError enum with 9 error types
+
+5. **COOL-Specific Constraints Enforced:**
+   - Cannot inherit from Int, String, Bool, or SELF_TYPE
+   - All classes implicitly inherit from Object if no parent specified
+   - Cycle detection in inheritance chains
+   - Duplicate class definition detection
+
+6. **Integration Points:**
+   - Created `parser/src/lib.rs` to expose AST types as library
+   - Added semant to workspace Cargo.toml members
+   - Dependencies: parser crate (for AST types)
+
+7. **Testing:**
+   - 12 unit tests created covering:
+     - Built-in class hierarchy
+     - Type conformance
+     - LUB computation
+     - Scope stack operations (nesting, shadowing, duplicate detection)
+     - Type representation and literal inference
+   - All tests passing
+
+**Interfaces Defined for Hopper:**
+- `SemanticAnalyzer::check_program()` - Entry point for full program validation
+- `TypeChecker::infer_type()` - Expression type inference (stubs for complex expressions)
+- `TypeChecker::check_conformance()` - Type compatibility checking
+- Error handling via Result<(), Vec<SemanticError>>
+
+**Implementation Strategy:**
+- Architecture focuses on structure and public interfaces
+- Placeholder implementations for complex logic (method dispatch, case expressions, let bindings)
+- Hopper will fill in:
+  - Full expression type checking
+  - Method signature validation
+  - Attribute initialization checking
+  - Dispatch resolution (static and dynamic)
+  - SELF_TYPE handling in all contexts
+
+**Build Status:** ✅ Compiles cleanly, all tests pass
+
+---
