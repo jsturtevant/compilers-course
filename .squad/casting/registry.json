@@ -1,0 +1,44 @@
+{
+  "agents": [
+    {
+      "persistent_name": "Turing",
+      "universe": "computing-pioneers",
+      "role": "Lead",
+      "created_at": "2026-02-27T21:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Hopper",
+      "universe": "computing-pioneers",
+      "role": "Compiler Dev",
+      "created_at": "2026-02-27T21:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Ritchie",
+      "universe": "computing-pioneers",
+      "role": "Systems Dev",
+      "created_at": "2026-02-27T21:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Stroustrup",
+      "universe": "computing-pioneers",
+      "role": "Rust Expert",
+      "created_at": "2026-02-27T21:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Knuth",
+      "universe": "computing-pioneers",
+      "role": "Docs",
+      "created_at": "2026-02-27T21:39:00Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  ]
+}

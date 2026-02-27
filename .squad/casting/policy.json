@@ -1,0 +1,7 @@
+{
+  "allowed_universes": [
+    "computing-pioneers"
+  ],
+  "default_capacity": 12,
+  "overflow_strategy": "diegetic_expansion"
+}

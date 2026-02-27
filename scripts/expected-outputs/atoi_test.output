@@ -1,0 +1,8 @@
+COMPILATION_FAILED
+atoi_test.cl:25: Class A2I of let-bound identifier z is undefined.
+atoi_test.cl:25: 'new' used with undefined class A2I.
+atoi_test.cl:31: Dispatch on undefined class A2I.
+atoi_test.cl:31: Inferred type Object of initialization of i does not conform to identifier's declared type Int.
+atoi_test.cl:32: Dispatch on undefined class A2I.
+atoi_test.cl:32: Inferred type Object of initialization of news does not conform to identifier's declared type String.
+Compilation halted due to static semantic errors.

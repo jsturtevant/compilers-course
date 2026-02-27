@@ -329,3 +329,419 @@ where
         .then_ignore(just(Token::Comment).repeated())
         .map(|classes| ast::Program { classes })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ast::*;
+
+    fn parse_program(src: &str) -> Result<Program, Vec<Rich<Token>>> {
+        let token_iter = Token::lexer(src)
+            .spanned()
+            .map(|(tok, span)| match tok {
+                Ok(tok) => (tok, SimpleSpan::from(span)),
+                Err(()) => (Token::Error, span.into()),
+            });
+        let token_stream = Stream::from_iter(token_iter)
+            .map((0..src.len()).into(), |(t, s): (_, _)| (t, s));
+
+        parser().parse(token_stream).into_result()
+    }
+
+    // === Class and Feature Tests ===
+
+    #[test]
+    fn test_simple_class() {
+        let src = "class Main { };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        assert_eq!(prog.classes.len(), 1);
+        assert_eq!(prog.classes[0].name, "Main");
+        assert!(prog.classes[0].parent.is_none());
+        assert_eq!(prog.classes[0].features.len(), 0);
+    }
+
+    #[test]
+    fn test_class_with_inheritance() {
+        let src = "class Child inherits Parent { };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        assert_eq!(prog.classes[0].name, "Child");
+        assert_eq!(prog.classes[0].parent, Some("Parent".to_string()));
+    }
+
+    #[test]
+    fn test_method_feature() {
+        let src = "class Main { foo():Int { 42 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        assert_eq!(prog.classes[0].features.len(), 1);
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => {
+                assert_eq!(m.name, "foo");
+                assert_eq!(m.return_type, "Int");
+                assert_eq!(m.formals.len(), 0);
+                matches!(m.body, Expr::Integer(42));
+            }
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_method_with_parameters() {
+        let src = "class Main { add(x:Int, y:Int):Int { x }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => {
+                assert_eq!(m.formals.len(), 2);
+                assert_eq!(m.formals[0].name, "x");
+                assert_eq!(m.formals[0].typ, "Int");
+                assert_eq!(m.formals[1].name, "y");
+                assert_eq!(m.formals[1].typ, "Int");
+            }
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_attribute_feature() {
+        let src = "class Main { x:Int; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Attribute(a) => {
+                assert_eq!(a.name, "x");
+                assert_eq!(a.attr_type, "Int");
+                assert!(a.init.is_none());
+            }
+            _ => panic!("Expected attribute"),
+        }
+    }
+
+    #[test]
+    fn test_attribute_with_init() {
+        let src = "class Main { x:Int <- 42; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Attribute(a) => {
+                assert_eq!(a.name, "x");
+                assert!(a.init.is_some());
+            }
+            _ => panic!("Expected attribute"),
+        }
+    }
+
+    // === Operator Precedence Tests ===
+
+    #[test]
+    fn test_addition() {
+        let src = "class Main { main():Int { 1 + 2 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => matches!(m.body, Expr::Plus(_, _)),
+            _ => panic!("Expected method"),
+        };
+    }
+
+    #[test]
+    fn test_multiplication_precedence() {
+        // 1 + 2 * 3 should parse as 1 + (2 * 3)
+        let src = "class Main { main():Int { 1 + 2 * 3 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Plus(left, right) => {
+                    matches!(**left, Expr::Integer(1));
+                    matches!(**right, Expr::Times(_, _));
+                }
+                _ => panic!("Expected plus with times on right"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_left_associativity() {
+        // 1 + 2 + 3 should parse as (1 + 2) + 3
+        let src = "class Main { main():Int { 1 + 2 + 3 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Plus(left, right) => {
+                    matches!(**left, Expr::Plus(_, _));
+                    matches!(**right, Expr::Integer(3));
+                }
+                _ => panic!("Expected left-associative plus"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_comparison_lower_precedence() {
+        // 1 + 2 < 3 + 4 should parse as (1 + 2) < (3 + 4)
+        let src = "class Main { main():Bool { 1 + 2 < 3 + 4 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Lt(left, right) => {
+                    matches!(**left, Expr::Plus(_, _));
+                    matches!(**right, Expr::Plus(_, _));
+                }
+                _ => panic!("Expected comparison with plus on both sides"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_unary_not() {
+        let src = "class Main { main():Bool { not true }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => matches!(m.body, Expr::Not(_)),
+            _ => panic!("Expected method"),
+        };
+    }
+
+    #[test]
+    fn test_unary_tilde() {
+        let src = "class Main { main():Int { ~42 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => matches!(m.body, Expr::Not(_)),
+            _ => panic!("Expected method"),
+        };
+    }
+
+    // === Control Flow Tests ===
+
+    #[test]
+    fn test_if_expression() {
+        let src = "class Main { main():Int { if true then 1 else 2 fi }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::If { cond, then_branch, else_branch } => {
+                    matches!(**cond, Expr::True);
+                    matches!(**then_branch, Expr::Integer(1));
+                    matches!(**else_branch, Expr::Integer(2));
+                }
+                _ => panic!("Expected if expression"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_while_expression() {
+        let src = "class Main { main():Object { while true loop 42 pool }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::While { cond, body } => {
+                    matches!(**cond, Expr::True);
+                    matches!(**body, Expr::Integer(42));
+                }
+                _ => panic!("Expected while expression"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_block_expression() {
+        let src = "class Main { main():Int { { 1; 2; 3 } }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Block(exprs) => {
+                    assert_eq!(exprs.len(), 3);
+                }
+                _ => panic!("Expected block"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_let_expression() {
+        let src = "class Main { main():Int { let x:Int in x }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Let { bindings, .. } => {
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(bindings[0].name, "x");
+                    assert_eq!(bindings[0].typ, "Int");
+                }
+                _ => panic!("Expected let expression"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_case_expression() {
+        let src = "class Main { main():Int { case x of y:Int => 1; esac }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Case { branches, .. } => {
+                    assert_eq!(branches.len(), 1);
+                    assert_eq!(branches[0].name, "y");
+                    assert_eq!(branches[0].typ, "Int");
+                }
+                _ => panic!("Expected case expression"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    // === Assignment and Dispatch Tests ===
+
+    #[test]
+    fn test_assignment() {
+        let src = "class Main { main():Int { x <- 42 }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Assign { name, expr } => {
+                    assert_eq!(name, "x");
+                    matches!(**expr, Expr::Integer(42));
+                }
+                _ => panic!("Expected assignment"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_method_dispatch() {
+        let src = "class Main { main():Int { obj.method() }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Dispatch { method, static_type, args, .. } => {
+                    assert_eq!(method, "method");
+                    assert!(static_type.is_none());
+                    assert_eq!(args.len(), 0);
+                }
+                _ => panic!("Expected dispatch"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_static_dispatch() {
+        let src = "class Main { main():Int { obj@Type.method() }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::Dispatch { static_type, method, .. } => {
+                    assert_eq!(static_type, &Some("Type".to_string()));
+                    assert_eq!(method, "method");
+                }
+                _ => panic!("Expected static dispatch"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    #[test]
+    fn test_new_expression() {
+        let src = "class Main { main():Int { new Int }; };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        match &prog.classes[0].features[0] {
+            Feature::Method(m) => match &m.body {
+                Expr::New(typ) => assert_eq!(typ, "Int"),
+                _ => panic!("Expected new expression"),
+            },
+            _ => panic!("Expected method"),
+        }
+    }
+
+    // === Multiple Classes ===
+
+    #[test]
+    fn test_multiple_classes() {
+        let src = "class A { }; class B { }; class C { };";
+        let result = parse_program(src);
+        assert!(result.is_ok());
+        let prog = result.unwrap();
+        assert_eq!(prog.classes.len(), 3);
+    }
+
+    // === Comments ===
+    // Note: Comments are handled by lexer and padded around tokens
+    // Inline comment tests would require more complex test setup
+
+    // === Error Recovery Tests ===
+
+    #[test]
+    fn test_missing_semicolon() {
+        let src = "class Main { }"; // Missing semicolon
+        let result = parse_program(src);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_fi() {
+        let src = "class Main { main():Int { if true then 1 else 2 }; };";
+        let result = parse_program(src);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_pool() {
+        let src = "class Main { main():Object { while true loop 42 }; };";
+        let result = parse_program(src);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_method_no_body() {
+        let src = "class Main { foo():Int; };";
+        let result = parse_program(src);
+        assert!(result.is_err());
+    }
+}

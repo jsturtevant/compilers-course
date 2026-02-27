@@ -1,0 +1,17 @@
+{
+  "assignments": [
+    {
+      "assignment_id": "compilers-course-2026-02-27",
+      "universe": "computing-pioneers",
+      "created_at": "2026-02-27T21:39:00Z",
+      "agents": [
+        { "name": "Turing", "role": "Lead" },
+        { "name": "Hopper", "role": "Compiler Dev" },
+        { "name": "Ritchie", "role": "Systems Dev" },
+        { "name": "Stroustrup", "role": "Rust Expert" },
+        { "name": "Knuth", "role": "Docs" }
+      ],
+      "reason": "Computing Pioneers selected for compilers course project — fitting for the domain"
+    }
+  ]
+}
