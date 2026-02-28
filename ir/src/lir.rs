@@ -205,6 +205,11 @@ pub enum LirInstr {
     /// Stack: [] -> [vtable_addr]
     GetVTableAddr(String),
 
+    /// Get address of pre-allocated Bool constant
+    /// Stack: [i32 value (0 or 1)] -> [Bool object ptr]
+    /// Returns BOOL_TRUE if value != 0, BOOL_FALSE if value == 0
+    BoxBool,
+
     /// Trap (runtime error)
     Unreachable,
 

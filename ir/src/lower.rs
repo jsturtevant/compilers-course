@@ -456,7 +456,10 @@ impl LoweringContext {
             }
 
             HirExpr::BoolLiteral { value, .. } => {
-                vec![LirInstr::I32Const(if *value { 1 } else { 0 })]
+                vec![
+                    LirInstr::I32Const(if *value { 1 } else { 0 }),
+                    LirInstr::BoxBool,
+                ]
             }
 
             HirExpr::StringLiteral { value, .. } => {
@@ -555,6 +558,7 @@ impl LoweringContext {
                 instrs.extend(self.lower_expr(left));
                 instrs.extend(self.lower_expr(right));
                 instrs.push(LirInstr::I32LtS);
+                instrs.push(LirInstr::BoxBool);
                 instrs
             }
 
@@ -563,6 +567,7 @@ impl LoweringContext {
                 instrs.extend(self.lower_expr(left));
                 instrs.extend(self.lower_expr(right));
                 instrs.push(LirInstr::I32LeS);
+                instrs.push(LirInstr::BoxBool);
                 instrs
             }
 
@@ -578,13 +583,17 @@ impl LoweringContext {
                 } else {
                     instrs.push(LirInstr::I32Eq);
                 }
+                instrs.push(LirInstr::BoxBool);
                 instrs
             }
 
             HirExpr::Not { expr, .. } => {
                 let mut instrs = Vec::new();
                 instrs.extend(self.lower_expr(expr));
+                // Unbox Bool to get raw value, then negate, then box again
+                instrs.push(LirInstr::I32Load { offset: 12, align: 4 }); // Load Bool value
                 instrs.push(LirInstr::I32Eqz); // Boolean not = compare to zero
+                instrs.push(LirInstr::BoxBool);
                 instrs
             }
 
@@ -600,6 +609,7 @@ impl LoweringContext {
                 let mut instrs = Vec::new();
                 instrs.extend(self.lower_expr(expr));
                 instrs.push(LirInstr::I32Eqz); // Check if null (0)
+                instrs.push(LirInstr::BoxBool);
                 instrs
             }
 
@@ -619,8 +629,10 @@ impl LoweringContext {
                 // Use structured if/else for WASM compatibility
                 let mut instrs = Vec::new();
 
-                // Evaluate condition
+                // Evaluate condition (returns boxed Bool)
                 instrs.extend(self.lower_expr(cond));
+                // Unbox Bool to get raw i32 value for WASM if instruction
+                instrs.push(LirInstr::I32Load { offset: 12, align: 4 });
                 
                 // Then and else branches lowered separately
                 let then_instrs = self.lower_expr(then_branch);
@@ -639,7 +651,9 @@ impl LoweringContext {
             HirExpr::While { cond, body, .. } => {
                 // Use structured while loop for WASM compatibility
                 // WASM pattern: block { loop { cond; br_if 1; body; br 0 } } i32.const 0
-                let cond_instrs = self.lower_expr(cond);
+                let mut cond_instrs = self.lower_expr(cond);
+                // Unbox Bool to get raw i32 value for WASM br_if instruction
+                cond_instrs.push(LirInstr::I32Load { offset: 12, align: 4 });
                 let body_instrs = self.lower_expr(body);
                 
                 vec![LirInstr::WhileLoop {

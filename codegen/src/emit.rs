@@ -23,6 +23,10 @@ pub struct EmitContext {
     call_types: HashMap<u32, u32>,
     /// Map from class name to vtable address in memory
     vtable_addresses: HashMap<String, u32>,
+    /// Address of pre-allocated Bool false constant
+    bool_false_addr: u32,
+    /// Address of pre-allocated Bool true constant
+    bool_true_addr: u32,
 }
 
 impl EmitContext {
@@ -35,12 +39,30 @@ impl EmitContext {
             runtime,
             call_types: HashMap::new(),
             vtable_addresses: HashMap::new(),
+            bool_false_addr: 0,
+            bool_true_addr: 0,
         }
     }
 
     /// Get runtime function indices
     pub fn runtime(&self) -> &RuntimeFunctions {
         &self.runtime
+    }
+
+    /// Set Bool constant addresses
+    pub fn set_bool_addrs(&mut self, false_addr: u32, true_addr: u32) {
+        self.bool_false_addr = false_addr;
+        self.bool_true_addr = true_addr;
+    }
+
+    /// Get Bool false constant address
+    pub fn get_bool_false_addr(&self) -> u32 {
+        self.bool_false_addr
+    }
+
+    /// Get Bool true constant address
+    pub fn get_bool_true_addr(&self) -> u32 {
+        self.bool_true_addr
     }
 
     /// Register a function name -> index mapping
@@ -285,6 +307,33 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
         }
         vtable_offset += (vtable.methods.len() * 4) as u32;
     }
+
+    // Create static Bool objects (BOOL_FALSE and BOOL_TRUE) after vtables
+    // Bool object layout: class_tag:i32, size:i32, vtable:i32, value:i32
+    let bool_vtable_addr = ctx.get_vtable_address("Bool").unwrap_or(0);
+    
+    // Align to 16-byte boundary for Bool objects
+    let bool_false_addr = ((vtable_offset + 15) / 16) * 16;
+    let bool_true_addr = bool_false_addr + 16;
+    
+    // Create BOOL_FALSE object (value = 0)
+    let mut bool_false_data = Vec::new();
+    bool_false_data.extend_from_slice(&4i32.to_le_bytes());  // class_tag = 4 (Bool)
+    bool_false_data.extend_from_slice(&16i32.to_le_bytes()); // size = 16
+    bool_false_data.extend_from_slice(&(bool_vtable_addr as i32).to_le_bytes()); // vtable_ptr
+    bool_false_data.extend_from_slice(&0i32.to_le_bytes());  // value = 0 (false)
+    module.add_data(bool_false_addr, bool_false_data);
+    
+    // Create BOOL_TRUE object (value = 1)
+    let mut bool_true_data = Vec::new();
+    bool_true_data.extend_from_slice(&4i32.to_le_bytes());  // class_tag = 4 (Bool)
+    bool_true_data.extend_from_slice(&16i32.to_le_bytes()); // size = 16
+    bool_true_data.extend_from_slice(&(bool_vtable_addr as i32).to_le_bytes()); // vtable_ptr
+    bool_true_data.extend_from_slice(&1i32.to_le_bytes());  // value = 1 (true)
+    module.add_data(bool_true_addr, bool_true_data);
+    
+    // Register Bool constant addresses in context
+    ctx.set_bool_addrs(bool_false_addr, bool_true_addr);
 
     // Add string literals to data section AFTER vtable addresses are known
     // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
@@ -690,6 +739,17 @@ fn emit_instruction(func: &mut Function, ctx: &EmitContext, instr: &LirInstr) ->
             // Look up the vtable address for this class
             let addr = ctx.get_vtable_address(class_name).unwrap_or(0);
             func.instruction(&Instruction::I32Const(addr as i32));
+        }
+
+        LirInstr::BoxBool => {
+            // Convert raw i32 boolean (0 or 1) to boxed Bool object pointer
+            // Stack: [i32 value] -> [Bool object ptr]
+            // if value != 0 { BOOL_TRUE } else { BOOL_FALSE }
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(ValType::I32)));
+            func.instruction(&Instruction::I32Const(ctx.get_bool_true_addr() as i32));
+            func.instruction(&Instruction::Else);
+            func.instruction(&Instruction::I32Const(ctx.get_bool_false_addr() as i32));
+            func.instruction(&Instruction::End);
         }
 
         LirInstr::Unreachable => {
