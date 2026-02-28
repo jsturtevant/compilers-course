@@ -44,7 +44,13 @@ impl<'a> Lowerer<'a> {
             next_tag += 1;
         }
 
-        // Build vtables and method ownership tracking for all classes
+        // Build vtables for builtin classes first
+        // These are needed for proper method index lookup on builtin types
+        for builtin in &["Object", "IO", "String", "Int", "Bool"] {
+            self.build_vtable_for_builtin(builtin);
+        }
+        
+        // Build vtables and method ownership tracking for all user-defined classes
         for class in &program.classes {
             self.build_vtable_and_owners(&class.name, class);
         }
@@ -59,6 +65,27 @@ impl<'a> Lowerer<'a> {
         Ok(HirProgram {
             classes: hir_classes,
         })
+    }
+
+    fn build_vtable_for_builtin(&mut self, class_name: &str) {
+        let mut vtable = Vec::new();
+        
+        // Get all methods (including inherited) in order
+        let methods = self.class_hierarchy.get_all_methods(class_name);
+        for (method_name, _sig) in methods {
+            vtable.push(method_name.clone());
+            
+            // Use class_hierarchy to find which class defines this method
+            let defining_class = self.class_hierarchy
+                .get_method_defining_class(class_name, &method_name)
+                .unwrap_or_else(|| class_name.to_string());
+            self.method_owners.insert(
+                (class_name.to_string(), method_name),
+                defining_class
+            );
+        }
+
+        self.vtables.insert(class_name.to_string(), vtable);
     }
 
     fn build_vtable_and_owners(&mut self, class_name: &str, _class: &Class) {
@@ -540,7 +567,9 @@ impl<'a> Lowerer<'a> {
                             class_name.clone()
                         });
                     
-                    let method_index = self.get_vtable_index(&defining_class, method);
+                    // Use the receiver's class for vtable index, not the defining class
+                    // This ensures consistent slot indices across the inheritance hierarchy
+                    let method_index = self.get_vtable_index(&class_name, method);
                     
                     // Get return type from method signature
                     let return_type = self.class_hierarchy
@@ -586,7 +615,8 @@ impl<'a> Lowerer<'a> {
                     .get_method_defining_class(&class_name, name)
                     .unwrap_or_else(|| class_name.clone());
                     
-                let method_index = self.get_vtable_index(&defining_class, name);
+                // Use the receiver's class for vtable index, not the defining class
+                let method_index = self.get_vtable_index(&class_name, name);
                 
                 // Get return type from method signature
                 let return_type = self.class_hierarchy

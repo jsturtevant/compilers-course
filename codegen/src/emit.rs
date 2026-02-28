@@ -19,6 +19,10 @@ pub struct EmitContext {
     current_depth: u32,
     /// Runtime function indices
     runtime: RuntimeFunctions,
+    /// Type index for call_indirect by number of params (params -> type_idx)
+    call_types: HashMap<u32, u32>,
+    /// Map from class name to vtable address in memory
+    vtable_addresses: HashMap<String, u32>,
 }
 
 impl EmitContext {
@@ -29,6 +33,8 @@ impl EmitContext {
             label_depths: HashMap::new(),
             current_depth: 0,
             runtime,
+            call_types: HashMap::new(),
+            vtable_addresses: HashMap::new(),
         }
     }
 
@@ -45,6 +51,26 @@ impl EmitContext {
     /// Get function index by name
     pub fn get_function(&self, name: &str) -> Option<u32> {
         self.function_map.get(name).copied()
+    }
+
+    /// Register a type index for call_indirect with given param count
+    pub fn register_call_type(&mut self, num_params: u32, type_idx: u32) {
+        self.call_types.insert(num_params, type_idx);
+    }
+
+    /// Get type index for call_indirect with given param count
+    pub fn get_call_type(&self, num_params: u32) -> Option<u32> {
+        self.call_types.get(&num_params).copied()
+    }
+
+    /// Register vtable address for a class
+    pub fn register_vtable_address(&mut self, class_name: String, addr: u32) {
+        self.vtable_addresses.insert(class_name, addr);
+    }
+
+    /// Get vtable address for a class
+    pub fn get_vtable_address(&self, class_name: &str) -> Option<u32> {
+        self.vtable_addresses.get(class_name).copied()
     }
 
     /// Push a label scope
@@ -97,34 +123,6 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     // Export memory for debugging
     module.export_memory("memory");
 
-    // Add string literals to data section
-    // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
-    for string_data in &program.string_data {
-        let bytes = string_data.value.as_bytes();
-        let length = bytes.len() as i32;
-        
-        // Build string object in memory: header + data
-        let mut data = Vec::new();
-        
-        // class_tag (String class tag - use 0 for now)
-        data.extend_from_slice(&0i32.to_le_bytes());
-        
-        // size (total size of object)
-        let total_size = 16 + bytes.len();
-        data.extend_from_slice(&(total_size as i32).to_le_bytes());
-        
-        // vtable_ptr (0 for now)
-        data.extend_from_slice(&0i32.to_le_bytes());
-        
-        // length (number of characters)
-        data.extend_from_slice(&length.to_le_bytes());
-        
-        // string data
-        data.extend_from_slice(bytes);
-        
-        module.add_data(string_data.offset, data);
-    }
-
     // Add runtime functions (Object, IO, String)
     let runtime = add_runtime(&mut module);
     
@@ -150,6 +148,14 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     ctx.register_function("String_concat".to_string(), runtime.string_concat);
     ctx.register_function("String_substr".to_string(), runtime.string_substr);
 
+    // Add type signatures for call_indirect with different param counts (0-10 params)
+    // All COOL methods take i32s and return i32
+    for num_params in 0..=10 {
+        let params: Vec<ValType> = (0..num_params).map(|_| ValType::I32).collect();
+        let type_idx = module.add_type(params, vec![ValType::I32]);
+        ctx.register_call_type(num_params, type_idx);
+    }
+
     // Add type signatures and function declarations
     for func in &program.functions {
         let params: Vec<ValType> = func.params.iter()
@@ -162,6 +168,123 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
 
         let type_idx = module.add_type(params, results);
         module.add_function(type_idx);
+    }
+
+    // Define builtin vtables (alphabetically sorted methods, matching class_hierarchy.get_all_methods)
+    let builtin_vtables = vec![
+        ("Object", vec!["Object_abort", "Object_copy", "Object_type_name"]),
+        ("IO", vec!["Object_abort", "Object_copy", "Object_type_name", "IO_in_int", "IO_in_string", "IO_out_int", "IO_out_string"]),
+        ("String", vec!["Object_abort", "Object_copy", "Object_type_name", "String_concat", "String_length", "String_substr"]),
+        ("Int", vec!["Object_abort", "Object_copy", "Object_type_name"]),
+        ("Bool", vec!["Object_abort", "Object_copy", "Object_type_name"]),
+    ];
+
+    // Initialize function table for dynamic dispatch
+    // Collect all functions that need to be in the table (from both builtin and user vtables)
+    let mut table_functions: Vec<u32> = Vec::new();
+    
+    // Add builtin vtable methods to function table
+    for (_class_name, methods) in &builtin_vtables {
+        for method_name in methods {
+            if let Some(func_idx) = ctx.get_function(method_name) {
+                if !table_functions.contains(&func_idx) {
+                    table_functions.push(func_idx);
+                }
+            }
+        }
+    }
+    
+    // Add user-defined vtable methods to function table
+    for vtable in &program.vtables {
+        for method_name in &vtable.methods {
+            if let Some(func_idx) = ctx.get_function(method_name) {
+                if !table_functions.contains(&func_idx) {
+                    table_functions.push(func_idx);
+                }
+            }
+        }
+    }
+    
+    // Only create table if we have functions to put in it
+    if !table_functions.is_empty() {
+        let table_size = table_functions.len() as u32;
+        module.init_table(table_size, Some(table_size));
+        module.add_element_section(&table_functions);
+    }
+
+    // Create vtables in memory and register their addresses
+    // Vtables start at 0x4000 (after string literals)
+    let mut vtable_offset = 0x4000u32;
+    
+    // First, create builtin vtables
+    for (class_name, methods) in &builtin_vtables {
+        ctx.register_vtable_address(class_name.to_string(), vtable_offset);
+        
+        let mut vtable_data = Vec::new();
+        for method_name in methods {
+            let table_idx = if let Some(func_idx) = ctx.get_function(method_name) {
+                table_functions.iter().position(|&f| f == func_idx).unwrap_or(0) as u32
+            } else {
+                0
+            };
+            vtable_data.extend_from_slice(&table_idx.to_le_bytes());
+        }
+        
+        if !vtable_data.is_empty() {
+            module.add_data(vtable_offset, vtable_data.clone());
+        }
+        vtable_offset += (methods.len() * 4) as u32;
+    }
+    
+    // Then, create user-defined vtables
+    for vtable in &program.vtables {
+        ctx.register_vtable_address(vtable.class_name.clone(), vtable_offset);
+        
+        // Build vtable data: array of function table indices
+        let mut vtable_data = Vec::new();
+        for method_name in &vtable.methods {
+            // Find the index in the function table (not the function index)
+            let table_idx = if let Some(func_idx) = ctx.get_function(method_name) {
+                table_functions.iter().position(|&f| f == func_idx).unwrap_or(0) as u32
+            } else {
+                0
+            };
+            vtable_data.extend_from_slice(&table_idx.to_le_bytes());
+        }
+        
+        if !vtable_data.is_empty() {
+            module.add_data(vtable_offset, vtable_data.clone());
+        }
+        vtable_offset += (vtable.methods.len() * 4) as u32;
+    }
+
+    // Add string literals to data section AFTER vtable addresses are known
+    // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
+    let string_vtable_addr = ctx.get_vtable_address("String").unwrap_or(0);
+    for string_data in &program.string_data {
+        let bytes = string_data.value.as_bytes();
+        let length = bytes.len() as i32;
+        
+        // Build string object in memory: header + data
+        let mut data = Vec::new();
+        
+        // class_tag (String class tag = 2)
+        data.extend_from_slice(&2i32.to_le_bytes());
+        
+        // size (total size of object)
+        let total_size = 16 + bytes.len();
+        data.extend_from_slice(&(total_size as i32).to_le_bytes());
+        
+        // vtable_ptr (String's vtable address)
+        data.extend_from_slice(&(string_vtable_addr as i32).to_le_bytes());
+        
+        // length (number of characters)
+        data.extend_from_slice(&length.to_le_bytes());
+        
+        // string data
+        data.extend_from_slice(bytes);
+        
+        module.add_data(string_data.offset, data);
     }
 
     // Emit function bodies
@@ -211,9 +334,10 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
                 memory_index: 0,
             }));
             
-            // Store vtable_ptr at offset 8 (0 for now, will be set when vtables are implemented)
+            // Store vtable_ptr at offset 8
+            let vtable_addr = ctx.get_vtable_address("Main").unwrap_or(0);
             start_func.instruction(&Instruction::LocalGet(0));
-            start_func.instruction(&Instruction::I32Const(0));
+            start_func.instruction(&Instruction::I32Const(vtable_addr as i32));
             start_func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
                 offset: 8,
                 align: 2,
@@ -359,6 +483,10 @@ fn emit_instruction(func: &mut Function, ctx: &EmitContext, instr: &LirInstr) ->
 
         LirInstr::I32Eqz => {
             func.instruction(&Instruction::I32Eqz);
+        }
+
+        LirInstr::I32Or => {
+            func.instruction(&Instruction::I32Or);
         }
 
         LirInstr::LocalGet(idx) => {
@@ -518,14 +646,22 @@ fn emit_instruction(func: &mut Function, ctx: &EmitContext, instr: &LirInstr) ->
         }
 
         LirInstr::CallIndirect { type_index, .. } => {
+            // type_index represents the number of params, look up the actual type index
+            let actual_type_idx = ctx.get_call_type(*type_index).unwrap_or(*type_index);
             func.instruction(&Instruction::CallIndirect {
-                type_index: *type_index,
+                type_index: actual_type_idx,
                 table_index: 0,
             });
         }
 
         LirInstr::Return => {
             func.instruction(&Instruction::Return);
+        }
+
+        LirInstr::GetVTableAddr(class_name) => {
+            // Look up the vtable address for this class
+            let addr = ctx.get_vtable_address(class_name).unwrap_or(0);
+            func.instruction(&Instruction::I32Const(addr as i32));
         }
 
         LirInstr::Unreachable => {

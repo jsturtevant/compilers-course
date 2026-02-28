@@ -102,9 +102,12 @@ pub enum LirInstr {
     /// Not equal
     I32Ne,
 
-    // Boolean operations
+    // Boolean/bitwise operations
     /// Equal to zero (logical not)
     I32Eqz,
+    
+    /// Bitwise OR (used for boolean OR)
+    I32Or,
 
     // Local variables
     /// Get local variable
@@ -198,6 +201,10 @@ pub enum LirInstr {
     Return,
 
     // Special operations
+    /// Load vtable address for a class (resolved at emit time)
+    /// Stack: [] -> [vtable_addr]
+    GetVTableAddr(String),
+
     /// Trap (runtime error)
     Unreachable,
 

@@ -372,7 +372,6 @@ impl ClassHierarchy {
 
     /// Get all methods for a class including inherited ones
     pub fn get_all_methods(&self, class_name: &str) -> Vec<(String, MethodSignature)> {
-        let mut methods = HashMap::new();
         let mut current = class_name;
         
         // Walk up the inheritance chain collecting methods
@@ -386,16 +385,27 @@ impl ClassHierarchy {
             }
         }
         
-        // Add methods from parent to child (so child can override)
+        // Collect methods in vtable order: parent methods first, then child methods
+        // Methods are sorted alphabetically within each class for determinism
+        // Overridden methods keep their original slot
+        let mut indexed: Vec<_> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        
         for ancestor in ancestors.iter().rev() {
             if let Some(class_info) = self.classes.get(*ancestor) {
-                for (method_name, method_sig) in &class_info.methods {
-                    methods.insert(method_name.clone(), method_sig.clone());
+                let mut class_methods: Vec<_> = class_info.methods.iter().collect();
+                class_methods.sort_by_key(|(name, _)| (*name).clone());
+                
+                for (method_name, method_sig) in class_methods {
+                    if !seen.contains(method_name) {
+                        seen.insert(method_name.clone());
+                        indexed.push((method_name.clone(), method_sig.clone()));
+                    }
                 }
             }
         }
         
-        methods.into_iter().collect()
+        indexed
     }
 }
 

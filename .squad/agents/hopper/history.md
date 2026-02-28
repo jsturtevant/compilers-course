@@ -729,3 +729,108 @@ cargo run --bin cool-wasm -- cool-support/examples/primes.cl -o /tmp/primes.wasm
 
 - **Attribute initialization:** primes.cl doesn't print because attribute initializers aren't called during object construction
 - **IO.out_int:** Integer output not yet working (separate issue)
+
+---
+
+## Case Expression Implementation (2026-02-28)
+
+### Task: Implement proper case expression codegen
+
+**Objective:** Enable `case expr of branches esac` expressions to perform proper type-based dispatch.
+
+### Implementation
+
+**1. Added Class Tag and Parent Maps to LoweringContext (ir/src/lower.rs)**
+- `class_tags: HashMap<String, usize>` — maps class name to class tag
+- `class_parents: HashMap<String, Option<String>>` — maps class name to parent class
+- Both maps built in `lower_program()` from HIR class data
+- Built-in classes (Object, IO, String, Int, Bool) added with standard tags 0-4
+
+**2. Proper Case Expression Lowering**
+The case expression generates:
+1. Store object pointer in local variable (for reuse)
+2. Read class tag from object's offset 0
+3. Store tag in local for repeated comparison
+4. Sort branches by specificity (most derived types checked first)
+5. Generate nested `IfElse` chain comparing tag against conforming types
+6. Bind case variable and execute matching branch body
+7. `Unreachable` (abort) if no match
+
+**3. Type Conformance for Case Dispatch**
+- `get_conforming_tags(type_name)` — returns all class tags that conform to (are subtypes of) the given type
+- `get_inheritance_depth(class_name)` — calculates inheritance depth for sorting branches
+- `class_conforms(class1, class2)` — checks if class1 is subtype of class2
+- Branches sorted by depth (deeper = more specific = checked first)
+
+**4. Added I32Or LIR Instruction**
+- New `LirInstr::I32Or` for bitwise OR operations
+- Used to combine multiple tag comparisons: `(tag == tag1) || (tag == tag2)`
+- Emission added in `codegen/src/emit.rs`
+
+### WASM Pattern Generated
+
+```wat
+;; Evaluate case expression
+;; Stack: [obj_ptr]
+local.tee $obj_ptr
+i32.load offset=0       ;; Read class tag
+local.set $tag
+
+;; Branch 1 (most specific type checked first)
+local.get $tag
+i32.const <tag1>
+i32.eq
+local.get $tag          ;; For multiple conforming tags
+i32.const <tag2>
+i32.eq
+i32.or                  ;; Combine conditions
+if (result i32)
+  local.get $obj_ptr
+  local.set $bound_var  ;; Bind case variable
+  ;; Execute branch body
+else
+  ;; Try next branch...
+  ;; Or unreachable (abort) if no match
+end
+```
+
+### Testing Results
+
+**Test Cases Validated:**
+- ✅ `case new Dog of d:Dog => "dog"; c:Cat => "cat"; a:Animal => "animal" esac` → "dog"
+- ✅ `case new Cat of d:Dog => "dog"; c:Cat => "cat"; a:Animal => "animal" esac` → "cat"
+- ✅ `case new Animal of d:Dog => "dog"; c:Cat => "cat"; a:Animal => "animal" esac` → "animal"
+- ✅ Variable binding works: `case animal of d:Dog => d.bark() esac` calls `bark()` on bound `d`
+
+**Existing Tests:**
+- ✅ All 29+ existing tests still pass
+- ✅ hello_world.cl still compiles and runs correctly
+
+### Files Modified
+
+- `ir/src/lower.rs`:
+  - Added `class_tags` and `class_parents` to `LoweringContext`
+  - Implemented `get_inheritance_depth()`, `get_conforming_tags()`, `class_conforms()`
+  - Implemented `build_case_dispatch()` and `build_tag_check_condition()`
+  - Replaced stub case expression lowering with proper type dispatch
+
+- `ir/src/lir.rs`:
+  - Added `I32Or` LIR instruction for bitwise OR
+
+- `codegen/src/emit.rs`:
+  - Added emission for `LirInstr::I32Or`
+
+### Key Design Decisions
+
+1. **Branch sorting by specificity:** More derived types checked first to match most specific type
+2. **Conformance checking:** All tags that conform to branch type are checked (handles inheritance)
+3. **No match = abort:** Uses `Unreachable` instruction for case with no matching branch
+4. **Variable binding:** Object pointer stored in local, bound variable set before body execution
+5. **Nested IfElse:** Reuses existing structured control flow rather than adding new LIR instruction
+
+### Technical Notes
+
+- Object class tag stored at offset 0 (standard object header)
+- Built-in class tags: Object=0, IO=1, String=2, Int=3, Bool=4
+- User-defined class tags assigned sequentially during AST→HIR lowering
+- I32Or used for combining multiple tag checks efficiently

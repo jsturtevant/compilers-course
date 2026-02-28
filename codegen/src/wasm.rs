@@ -32,6 +32,8 @@ pub struct WasmModule {
     data: DataSection,
     next_type_idx: u32,
     next_func_idx: u32,
+    /// Type cache for deduplication: (params, results) -> type_idx
+    type_cache: std::collections::HashMap<(Vec<ValType>, Vec<ValType>), u32>,
 }
 
 impl WasmModule {
@@ -52,6 +54,7 @@ impl WasmModule {
             data: DataSection::new(),
             next_type_idx: 0,
             next_func_idx: 0,
+            type_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -73,10 +76,17 @@ impl WasmModule {
     /// Add a function type signature
     ///
     /// Returns the type index for use in function declarations.
+    /// Uses caching to deduplicate identical type signatures.
     pub fn add_type(&mut self, params: Vec<ValType>, results: Vec<ValType>) -> u32 {
+        let key = (params.clone(), results.clone());
+        if let Some(&idx) = self.type_cache.get(&key) {
+            return idx;
+        }
+        
         self.types.ty().function(params, results);
         let idx = self.next_type_idx;
         self.next_type_idx += 1;
+        self.type_cache.insert(key, idx);
         idx
     }
 
@@ -134,6 +144,19 @@ impl WasmModule {
             table64: false,
             shared: false,
         });
+    }
+
+    /// Add an element section to initialize the function table
+    ///
+    /// Populates the function table with function references for call_indirect.
+    pub fn add_element_section(&mut self, func_indices: &[u32]) {
+        use wasm_encoder::Elements;
+        use std::borrow::Cow;
+        self.elements.active(
+            Some(0),  // table index
+            &wasm_encoder::ConstExpr::i32_const(0),  // offset
+            Elements::Functions(Cow::Borrowed(func_indices)),
+        );
     }
 
     /// Add static data to linear memory

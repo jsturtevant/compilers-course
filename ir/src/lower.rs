@@ -28,6 +28,10 @@ pub struct LoweringContext {
     class_parents: HashMap<String, Option<String>>,
     /// Map from class name to class metadata (for new expression)
     class_metadata: HashMap<String, ClassMetadata>,
+    /// Map from class name to vtable (list of function names)
+    class_vtables: HashMap<String, Vec<String>>,
+    /// Map from class name to methods defined in that class
+    class_methods: HashMap<String, Vec<String>>,
 }
 
 impl LoweringContext {
@@ -41,6 +45,8 @@ impl LoweringContext {
             class_tags: HashMap::new(),
             class_parents: HashMap::new(),
             class_metadata: HashMap::new(),
+            class_vtables: HashMap::new(),
+            class_methods: HashMap::new(),
         }
     }
 
@@ -93,6 +99,12 @@ impl LoweringContext {
             self.class_tags.insert(class.name.clone(), class.class_tag);
             self.class_parents.insert(class.name.clone(), class.parent.clone());
             
+            // Track which methods are defined in this class
+            let methods: Vec<String> = class.methods.iter()
+                .map(|m| m.name.clone())
+                .collect();
+            self.class_methods.insert(class.name.clone(), methods);
+            
             // Build class metadata for new expression
             let mut offset = 12u32; // Object header is 12 bytes
             let mut attrs = Vec::new();
@@ -108,9 +120,17 @@ impl LoweringContext {
         }
         // Add built-in classes with their tags (Object=0, IO=1, String=2, Int=3, Bool=4)
         // These may not be in the program but are needed for case matching
+        // NOTE: Method order must match get_all_methods() in class_hierarchy.rs
+        // which sorts methods alphabetically within each class
         if !self.class_tags.contains_key("Object") {
             self.class_tags.insert("Object".to_string(), 0);
             self.class_parents.insert("Object".to_string(), None);
+            self.class_methods.insert("Object".to_string(), vec!["abort".to_string(), "copy".to_string(), "type_name".to_string()]);
+            self.class_vtables.insert("Object".to_string(), vec![
+                "Object_abort".to_string(),
+                "Object_copy".to_string(),
+                "Object_type_name".to_string(),
+            ]);
             self.class_metadata.insert("Object".to_string(), ClassMetadata {
                 class_tag: 0,
                 object_size: 12, // Just header, no attributes
@@ -120,6 +140,19 @@ impl LoweringContext {
         if !self.class_tags.contains_key("IO") {
             self.class_tags.insert("IO".to_string(), 1);
             self.class_parents.insert("IO".to_string(), Some("Object".to_string()));
+            self.class_methods.insert("IO".to_string(), vec![
+                "in_int".to_string(), "in_string".to_string(),
+                "out_int".to_string(), "out_string".to_string(),
+            ]);
+            self.class_vtables.insert("IO".to_string(), vec![
+                "Object_abort".to_string(),
+                "Object_copy".to_string(),
+                "Object_type_name".to_string(),
+                "IO_in_int".to_string(),
+                "IO_in_string".to_string(),
+                "IO_out_int".to_string(),
+                "IO_out_string".to_string(),
+            ]);
             self.class_metadata.insert("IO".to_string(), ClassMetadata {
                 class_tag: 1,
                 object_size: 12,
@@ -129,6 +162,18 @@ impl LoweringContext {
         if !self.class_tags.contains_key("String") {
             self.class_tags.insert("String".to_string(), 2);
             self.class_parents.insert("String".to_string(), Some("Object".to_string()));
+            // Alphabetical order: concat, length, substr
+            self.class_methods.insert("String".to_string(), vec![
+                "concat".to_string(), "length".to_string(), "substr".to_string(),
+            ]);
+            self.class_vtables.insert("String".to_string(), vec![
+                "Object_abort".to_string(),
+                "Object_copy".to_string(),
+                "Object_type_name".to_string(),
+                "String_concat".to_string(),
+                "String_length".to_string(),
+                "String_substr".to_string(),
+            ]);
             // String has special layout: header + length + data pointer
             self.class_metadata.insert("String".to_string(), ClassMetadata {
                 class_tag: 2,
@@ -142,6 +187,12 @@ impl LoweringContext {
         if !self.class_tags.contains_key("Int") {
             self.class_tags.insert("Int".to_string(), 3);
             self.class_parents.insert("Int".to_string(), Some("Object".to_string()));
+            self.class_methods.insert("Int".to_string(), vec![]);
+            self.class_vtables.insert("Int".to_string(), vec![
+                "Object_abort".to_string(),
+                "Object_copy".to_string(),
+                "Object_type_name".to_string(),
+            ]);
             self.class_metadata.insert("Int".to_string(), ClassMetadata {
                 class_tag: 3,
                 object_size: 16, // 12 header + 4 value
@@ -151,6 +202,12 @@ impl LoweringContext {
         if !self.class_tags.contains_key("Bool") {
             self.class_tags.insert("Bool".to_string(), 4);
             self.class_parents.insert("Bool".to_string(), Some("Object".to_string()));
+            self.class_methods.insert("Bool".to_string(), vec![]);
+            self.class_vtables.insert("Bool".to_string(), vec![
+                "Object_abort".to_string(),
+                "Object_copy".to_string(),
+                "Object_type_name".to_string(),
+            ]);
             self.class_metadata.insert("Bool".to_string(), ClassMetadata {
                 class_tag: 4,
                 object_size: 16, // 12 header + 4 value
@@ -158,12 +215,27 @@ impl LoweringContext {
             });
         }
 
+        // Build vtables for user-defined classes with proper inheritance
+        // Process classes - we need to process in inheritance order
+        let sorted_classes = self.sort_classes_by_inheritance(program);
+        for class_name in &sorted_classes {
+            let class = program.classes.iter().find(|c| &c.name == class_name).unwrap();
+            let vtable = self.build_vtable_with_inheritance(class);
+            self.class_vtables.insert(class.name.clone(), vtable.clone());
+        }
+        
+        // Now generate LIR vtables
+        for class in &program.classes {
+            if let Some(methods) = self.class_vtables.get(&class.name) {
+                vtables.push(VTable {
+                    class_name: class.name.clone(),
+                    methods: methods.clone(),
+                });
+            }
+        }
+        
         // Lower each class
         for class in &program.classes {
-            // Generate vtable for this class
-            let vtable = self.lower_vtable(class);
-            vtables.push(vtable);
-            
             // Set up attribute offsets for this class
             self.setup_attributes(class);
 
@@ -191,17 +263,82 @@ impl LoweringContext {
             string_data,
         }
     }
-
-    /// Lower a class's vtable
-    fn lower_vtable(&self, class: &HirClass) -> VTable {
-        let methods = class.methods.iter()
-            .map(|m| format!("{}_{}", class.name, m.name))
-            .collect();
-
-        VTable {
-            class_name: class.name.clone(),
-            methods,
+    
+    /// Sort classes so parents come before children
+    fn sort_classes_by_inheritance(&self, program: &HirProgram) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        
+        fn visit(
+            class_name: &str,
+            parents: &HashMap<String, Option<String>>,
+            program: &HirProgram,
+            visited: &mut std::collections::HashSet<String>,
+            result: &mut Vec<String>,
+        ) {
+            if visited.contains(class_name) {
+                return;
+            }
+            
+            // Visit parent first
+            if let Some(Some(parent)) = parents.get(class_name) {
+                // Only visit if it's a user-defined class
+                if program.classes.iter().any(|c| &c.name == parent) {
+                    visit(parent, parents, program, visited, result);
+                }
+            }
+            
+            visited.insert(class_name.to_string());
+            result.push(class_name.to_string());
         }
+        
+        for class in &program.classes {
+            visit(&class.name, &self.class_parents, program, &mut visited, &mut result);
+        }
+        
+        result
+    }
+    
+    /// Build vtable for a class including inherited methods
+    fn build_vtable_with_inheritance(&self, class: &HirClass) -> Vec<String> {
+        let mut vtable = Vec::new();
+        
+        // Start with parent's vtable (default to Object if no explicit parent)
+        let parent_name = class.parent.clone().unwrap_or_else(|| "Object".to_string());
+        if let Some(parent_vtable) = self.class_vtables.get(&parent_name) {
+            vtable = parent_vtable.clone();
+        }
+        
+        // Sort methods alphabetically to match class_hierarchy.get_all_methods()
+        // This ensures vtable indices are consistent between ast_to_hir and lower
+        let mut sorted_methods: Vec<_> = class.methods.iter().collect();
+        sorted_methods.sort_by_key(|m| &m.name);
+        
+        // For each method in this class (alphabetically), either override or add
+        for method in sorted_methods {
+            let func_name = format!("{}_{}", class.name, method.name);
+            
+            // Check if this method overrides a parent method
+            let mut found = false;
+            for (i, existing) in vtable.iter().enumerate() {
+                // Extract method name from "ClassName_methodName"
+                if let Some(existing_method_name) = existing.split('_').last() {
+                    if existing_method_name == method.name {
+                        // Override parent's method
+                        vtable[i] = func_name.clone();
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            
+            if !found {
+                // New method - add to vtable
+                vtable.push(func_name);
+            }
+        }
+        
+        vtable
     }
 
     /// Lower a method to a LIR function
@@ -485,9 +622,9 @@ impl LoweringContext {
                     instrs.push(LirInstr::I32Const(metadata.object_size as i32));
                     instrs.push(LirInstr::I32Store { offset: 4, align: 4 });
                     
-                    // Store vtable pointer at offset 8 (0 for now, vtables not fully implemented)
+                    // Store vtable pointer at offset 8
                     instrs.push(LirInstr::LocalGet(obj_local));
-                    instrs.push(LirInstr::I32Const(0)); // TODO: vtable address
+                    instrs.push(LirInstr::GetVTableAddr(type_name.clone()));
                     instrs.push(LirInstr::I32Store { offset: 8, align: 4 });
                     
                     // Initialize attributes to default values based on type
@@ -521,25 +658,43 @@ impl LoweringContext {
             HirExpr::Dispatch { object, dispatch_info, args, .. } => {
                 let mut instrs = Vec::new();
                 
-                // For now, use direct dispatch as we're not yet implementing vtables
-                // Call the method directly: ClassName_methodName
+                // Dynamic dispatch via vtable
                 instrs.push(LirInstr::comment(format!(
-                    "Dispatch {}.{}",
+                    "Dynamic dispatch {}.{} (slot {})",
                     dispatch_info.class_name,
-                    dispatch_info.method_name
+                    dispatch_info.method_name,
+                    dispatch_info.method_index
                 )));
                 
-                // Evaluate object (receiver)
+                // Evaluate object (receiver) and save to local for later
                 instrs.extend(self.lower_expr(object));
+                let obj_local = self.alloc_local(LirType::I32);
+                instrs.push(LirInstr::LocalSet(obj_local));
                 
-                // Evaluate arguments
+                // Now build the call: push receiver, push args, lookup func, call_indirect
+                // First push the receiver
+                instrs.push(LirInstr::LocalGet(obj_local));
+                
+                // Evaluate arguments - push them after receiver
                 for arg in args {
                     instrs.extend(self.lower_expr(arg));
                 }
                 
-                // Direct call for MVP
-                let func_name = format!("{}_{}", dispatch_info.class_name, dispatch_info.method_name);
-                instrs.push(LirInstr::Call(func_name));
+                // Load vtable pointer from object (use local, don't consume receiver on stack)
+                instrs.push(LirInstr::LocalGet(obj_local));
+                instrs.push(LirInstr::I32Load { offset: 8, align: 4 });
+                
+                // Load function index from vtable at method_index * 4
+                let vtable_offset = (dispatch_info.method_index * 4) as u32;
+                instrs.push(LirInstr::I32Load { offset: vtable_offset, align: 4 });
+                
+                // Indirect call through the function table
+                // type_index is the number of args + 1 (for self) with i32 result
+                let num_params = args.len() + 1; // self + args
+                instrs.push(LirInstr::CallIndirect { 
+                    type_index: num_params as u32,
+                    method_index: dispatch_info.method_index as u32,
+                });
                 instrs
             }
 
