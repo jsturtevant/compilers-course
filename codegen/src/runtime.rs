@@ -44,7 +44,7 @@ pub const CLASS_NAME_TABLE_GLOBAL: u32 = 1;
 /// 2. Adds heap pointer global
 /// 3. Defines runtime functions for allocator, Object, IO, and String
 /// 4. Returns function indices for use in codegen
-pub fn add_runtime(module: &mut WasmModule, heap_start: u32, class_name_table_addr: u32) -> RuntimeFunctions {
+pub fn add_runtime(module: &mut WasmModule, heap_start: u32, class_name_table_addr: u32, string_vtable_addr: u32) -> RuntimeFunctions {
     // Add heap pointer global (starts after static data)
     module.add_global(ValType::I32, true, heap_start as i32);
     
@@ -79,7 +79,7 @@ pub fn add_runtime(module: &mut WasmModule, heap_start: u32, class_name_table_ad
     // IO methods
     let io_out_string = add_io_out_string(module, wasi_fd_write);
     let io_out_int = add_io_out_int(module, wasi_fd_write);
-    let io_in_string = add_io_in_string(module, wasi_fd_read);
+    let io_in_string = add_io_in_string(module, wasi_fd_read, alloc, string_vtable_addr);
     let io_in_int = add_io_in_int(module, wasi_fd_read);
 
     // String methods
@@ -517,45 +517,209 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
 
 /// IO.in_string() -> String
 ///
-/// Reads a string from stdin using WASI fd_read.
-/// Returns a simple buffer pointer (not a full String object for MVP).
-fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
+/// Reads a line from stdin using WASI fd_read (one byte at a time).
+/// Returns a proper String object.
+fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32, string_vtable_addr: u32) -> u32 {
     // (self: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
 
-    let mut func = Function::new([]);
+    // Locals: actual_len, str_ptr, loop_idx, byte, nread
+    let mut func = Function::new([
+        (1, ValType::I32), // actual_len (local 1)
+        (1, ValType::I32), // str_ptr (local 2)
+        (1, ValType::I32), // loop_idx (local 3)
+        (1, ValType::I32), // byte (local 4)
+        (1, ValType::I32), // nread (local 5)
+    ]);
     
-    // Set up iovec to read into buffer at 0x3000
-    // iovec[0].buf_ptr = 0x3000
-    func.instruction(&Instruction::I32Const(0x1100));
-    func.instruction(&Instruction::I32Const(0x3000));
-    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+    // Read byte-by-byte into buffer at 0x3000 until newline or EOF
+    // actual_len = 0
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(1));
+    
+    // Main read loop
+    func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    {
+        // Set up iovec for reading 1 byte into 0x3000 + actual_len
+        // iovec[0].buf_ptr = 0x3000 + actual_len
+        func.instruction(&Instruction::I32Const(0x1100));
+        func.instruction(&Instruction::I32Const(0x3000));
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        
+        // iovec[0].buf_len = 1
+        func.instruction(&Instruction::I32Const(0x1104));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        
+        // Call fd_read(0, 0x1100, 1, 0x1108)
+        func.instruction(&Instruction::I32Const(0));      // stdin fd
+        func.instruction(&Instruction::I32Const(0x1100)); // iovec ptr
+        func.instruction(&Instruction::I32Const(1));      // iovs_len
+        func.instruction(&Instruction::I32Const(0x1108)); // nread ptr
+        func.instruction(&Instruction::Call(wasi_fd_read));
+        func.instruction(&Instruction::Drop);             // drop errno
+        
+        // Load nread from 0x1108
+        func.instruction(&Instruction::I32Const(0x1108));
+        func.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::LocalSet(5));
+        
+        // If nread == 0 (EOF), exit loop
+        func.instruction(&Instruction::LocalGet(5));
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // Load the byte we just read
+        func.instruction(&Instruction::I32Const(0x3000));
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::LocalSet(4));
+        
+        // If byte == 10 (newline), exit loop (don't include newline in result)
+        func.instruction(&Instruction::LocalGet(4));
+        func.instruction(&Instruction::I32Const(10));
+        func.instruction(&Instruction::I32Eq);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // If byte == 0 (null), exit loop
+        func.instruction(&Instruction::LocalGet(4));
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // actual_len++
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::LocalSet(1));
+        
+        // Check buffer overflow (max 1024 bytes)
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32Const(1024));
+        func.instruction(&Instruction::I32GeU);
+        func.instruction(&Instruction::BrIf(1));
+        
+        func.instruction(&Instruction::Br(0));
+    }
+    func.instruction(&Instruction::End); // end loop
+    func.instruction(&Instruction::End); // end block
+    
+    // Allocate String object: 16 bytes header + actual_len
+    func.instruction(&Instruction::I32Const(16));
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::I32Add);
+    func.instruction(&Instruction::Call(alloc_func));
+    func.instruction(&Instruction::LocalSet(2)); // str_ptr
+    
+    // Store class_tag = 2 (String) at offset 0
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Const(2));
+    func.instruction(&Instruction::I32Store(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
     
-    // iovec[0].buf_len = 1024 bytes
-    func.instruction(&Instruction::I32Const(0x1104));
-    func.instruction(&Instruction::I32Const(1024));
-    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
-        offset: 0,
+    // Store size = 16 + actual_len at offset 4
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Const(16));
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::I32Add);
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 4,
         align: 2,
         memory_index: 0,
     }));
     
-    // Call fd_read(0, 0x1100, 1, 0x1108)
-    func.instruction(&Instruction::I32Const(0));      // stdin fd
-    func.instruction(&Instruction::I32Const(0x1100)); // iovec ptr
-    func.instruction(&Instruction::I32Const(1));      // iovs_len
-    func.instruction(&Instruction::I32Const(0x1108)); // nread ptr
-    func.instruction(&Instruction::Call(wasi_fd_read));
-    func.instruction(&Instruction::Drop);             // drop errno
+    // Store vtable_ptr at offset 8
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Const(string_vtable_addr as i32));
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 8,
+        align: 2,
+        memory_index: 0,
+    }));
     
-    // TODO: Allocate proper String object
-    // For MVP: return buffer pointer
-    func.instruction(&Instruction::I32Const(0x3000));
+    // Store length at offset 12
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 12,
+        align: 2,
+        memory_index: 0,
+    }));
+    
+    // Copy data from buffer (0x3000) to str_ptr+16
+    // loop_idx = 0
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(3));
+    
+    func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    {
+        // if loop_idx >= actual_len, exit
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32GeU);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // dest: str_ptr + 16 + loop_idx
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Const(16));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::I32Add);
+        
+        // src: 0x3000 + loop_idx
+        func.instruction(&Instruction::I32Const(0x3000));
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        
+        // store byte
+        func.instruction(&Instruction::I32Store8(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        
+        // loop_idx++
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Add);
+        func.instruction(&Instruction::LocalSet(3));
+        
+        func.instruction(&Instruction::Br(0));
+    }
+    func.instruction(&Instruction::End); // end loop
+    func.instruction(&Instruction::End); // end block
+    
+    // Return str_ptr
+    func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::End);
 
     module.add_code(func);

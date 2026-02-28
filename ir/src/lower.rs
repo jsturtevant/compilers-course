@@ -32,6 +32,8 @@ pub struct LoweringContext {
     class_vtables: HashMap<String, Vec<String>>,
     /// Map from class name to methods defined in that class
     class_methods: HashMap<String, Vec<String>>,
+    /// Classes currently being initialized (to detect cycles)
+    initializing_classes: std::collections::HashSet<String>,
 }
 
 impl LoweringContext {
@@ -47,6 +49,7 @@ impl LoweringContext {
             class_metadata: HashMap::new(),
             class_vtables: HashMap::new(),
             class_methods: HashMap::new(),
+            initializing_classes: std::collections::HashSet::new(),
         }
     }
 
@@ -75,6 +78,7 @@ impl LoweringContext {
         self.next_local_id = 0;
         self.locals.clear();
         self.local_types.clear();
+        self.initializing_classes.clear();
         // Don't clear attribute_offsets - they persist for the whole class
     }
     
@@ -304,6 +308,14 @@ impl LoweringContext {
             }
         }
 
+        // Generate synthetic Main_new function for _start to call
+        // This properly handles attribute initializers including complex expressions
+        if let Some(main_class) = program.classes.iter().find(|c| c.name == "Main") {
+            self.setup_attributes(main_class, program);
+            let main_new_func = self.generate_class_new_function(main_class);
+            functions.push(main_new_func);
+        }
+
         // Create string data section entries
         let mut string_data = Vec::new();
         for (i, s) in self.string_literals.iter().enumerate() {
@@ -399,6 +411,98 @@ impl LoweringContext {
         }
         
         vtable
+    }
+
+    /// Generate a synthetic ClassName_new function for constructing objects
+    /// This properly evaluates attribute initializers including complex expressions
+    fn generate_class_new_function(&mut self, class: &HirClass) -> LirFunction {
+        // Reset context for this function
+        self.reset();
+        
+        // No parameters, returns i32 (object pointer)
+        let params = Vec::new();
+        let return_type = LirType::I32;
+        let name = format!("{}_new", class.name);
+        
+        let mut instrs = Vec::new();
+        instrs.push(LirInstr::comment(format!("new {}", class.name)));
+        
+        // Look up class metadata to get object size and attributes
+        if let Some(metadata) = self.class_metadata.get(&class.name).cloned() {
+            // Allocate a local to hold the object pointer
+            let obj_local = self.alloc_local(LirType::I32);
+            
+            // Allocate memory for the object
+            instrs.push(LirInstr::I32Const(metadata.object_size as i32));
+            instrs.push(LirInstr::Alloc);
+            instrs.push(LirInstr::LocalTee(obj_local));
+            
+            // Store class tag at offset 0
+            instrs.push(LirInstr::I32Const(metadata.class_tag as i32));
+            instrs.push(LirInstr::I32Store { offset: 0, align: 4 });
+            
+            // Store object size at offset 4
+            instrs.push(LirInstr::LocalGet(obj_local));
+            instrs.push(LirInstr::I32Const(metadata.object_size as i32));
+            instrs.push(LirInstr::I32Store { offset: 4, align: 4 });
+            
+            // Store vtable pointer at offset 8
+            instrs.push(LirInstr::LocalGet(obj_local));
+            instrs.push(LirInstr::GetVTableAddr(class.name.clone()));
+            instrs.push(LirInstr::I32Store { offset: 8, align: 4 });
+            
+            // Set up "self" to point to the new object for attribute initializers
+            self.locals.insert("self".to_string(), obj_local);
+            
+            // Set up attribute offsets for this class
+            for (attr_name, _attr_type, attr_offset, _init) in &metadata.attributes {
+                self.attribute_offsets.insert(attr_name.clone(), *attr_offset);
+            }
+            
+            // Initialize attributes - evaluate initializers if present
+            for (attr_name, attr_type, attr_offset, attr_init) in &metadata.attributes {
+                instrs.push(LirInstr::comment(format!("init attr {}: {:?}", attr_name, attr_type)));
+                instrs.push(LirInstr::LocalGet(obj_local));
+                
+                if let Some(init_expr) = attr_init {
+                    // Evaluate the initializer expression
+                    instrs.extend(self.lower_expr(init_expr));
+                } else {
+                    // Default value based on type
+                    let default_value = match attr_type {
+                        TypeId::Int => 0,
+                        TypeId::Bool => 0,
+                        TypeId::String => 0,
+                        _ => 0,
+                    };
+                    instrs.push(LirInstr::I32Const(default_value));
+                }
+                instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
+            }
+            
+            // Return the object pointer
+            instrs.push(LirInstr::LocalGet(obj_local));
+        } else {
+            // Fallback: return 0 (shouldn't happen)
+            instrs.push(LirInstr::I32Const(0));
+        }
+        
+        // Build locals list
+        let param_count = params.len();
+        let locals = self.local_types.iter().enumerate()
+            .map(|(i, typ)| LirLocal {
+                index: (param_count + i) as u32,
+                typ: typ.clone(),
+            })
+            .collect();
+        
+        LirFunction {
+            name,
+            params,
+            return_type,
+            locals,
+            body: instrs,
+        }
     }
 
     /// Lower a method to a LIR function
@@ -683,6 +787,10 @@ impl LoweringContext {
                 let mut instrs = Vec::new();
                 instrs.push(LirInstr::comment(format!("new {}", type_name)));
                 
+                // Check for initialization cycle - if we're already initializing this class,
+                // just allocate and set defaults to break the cycle
+                let is_cycle = self.initializing_classes.contains(type_name);
+                
                 // Look up class metadata
                 if let Some(metadata) = self.class_metadata.get(type_name).cloned() {
                     // Allocate a temporary local to hold the object pointer
@@ -708,47 +816,67 @@ impl LoweringContext {
                     instrs.push(LirInstr::GetVTableAddr(type_name.clone()));
                     instrs.push(LirInstr::I32Store { offset: 8, align: 4 });
                     
-                    // Save current "self" binding and set up new object as "self"
-                    // This allows initializers to reference "self"
-                    let old_self = self.locals.get("self").copied();
-                    self.locals.insert("self".to_string(), obj_local);
-                    
-                    // Also set up attribute offsets for this class so initializers
-                    // can access other attributes
-                    let old_attribute_offsets = self.attribute_offsets.clone();
-                    self.attribute_offsets.clear();
-                    for (attr_name, _attr_type, attr_offset, _init) in &metadata.attributes {
-                        self.attribute_offsets.insert(attr_name.clone(), *attr_offset);
-                    }
-                    
-                    // Initialize attributes - evaluate initializers if present
-                    for (attr_name, attr_type, attr_offset, attr_init) in &metadata.attributes {
-                        instrs.push(LirInstr::comment(format!("init attr {}: {:?}", attr_name, attr_type)));
-                        instrs.push(LirInstr::LocalGet(obj_local));
-                        
-                        if let Some(init_expr) = attr_init {
-                            // Evaluate the initializer expression
-                            instrs.extend(self.lower_expr(init_expr));
-                        } else {
-                            // Default value based on type
+                    if is_cycle {
+                        // Cycle detected: initialize all attributes to defaults
+                        for (_attr_name, attr_type, attr_offset, _attr_init) in &metadata.attributes {
+                            instrs.push(LirInstr::LocalGet(obj_local));
                             let default_value = match attr_type {
-                                TypeId::Int => 0,      // Int defaults to 0
-                                TypeId::Bool => 0,     // Bool defaults to false
-                                TypeId::String => 0,   // String defaults to null (empty string ptr)
-                                _ => 0,                // Reference types default to null (0)
+                                TypeId::Int => 0,
+                                TypeId::Bool => 0,
+                                _ => 0,
                             };
                             instrs.push(LirInstr::I32Const(default_value));
+                            instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
                         }
-                        instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
-                    }
-                    
-                    // Restore old "self" binding and attribute offsets
-                    if let Some(old) = old_self {
-                        self.locals.insert("self".to_string(), old);
                     } else {
-                        self.locals.remove("self");
+                        // Mark this class as being initialized
+                        self.initializing_classes.insert(type_name.clone());
+                        
+                        // Save current "self" binding and set up new object as "self"
+                        // This allows initializers to reference "self"
+                        let old_self = self.locals.get("self").copied();
+                        self.locals.insert("self".to_string(), obj_local);
+                        
+                        // Also set up attribute offsets for this class so initializers
+                        // can access other attributes
+                        let old_attribute_offsets = self.attribute_offsets.clone();
+                        self.attribute_offsets.clear();
+                        for (attr_name, _attr_type, attr_offset, _init) in &metadata.attributes {
+                            self.attribute_offsets.insert(attr_name.clone(), *attr_offset);
+                        }
+                        
+                        // Initialize attributes - evaluate initializers if present
+                        for (attr_name, attr_type, attr_offset, attr_init) in &metadata.attributes {
+                            instrs.push(LirInstr::comment(format!("init attr {}: {:?}", attr_name, attr_type)));
+                            instrs.push(LirInstr::LocalGet(obj_local));
+                            
+                            if let Some(init_expr) = attr_init {
+                                // Evaluate the initializer expression
+                                instrs.extend(self.lower_expr(init_expr));
+                            } else {
+                                // Default value based on type
+                                let default_value = match attr_type {
+                                    TypeId::Int => 0,      // Int defaults to 0
+                                    TypeId::Bool => 0,     // Bool defaults to false
+                                    TypeId::String => 0,   // String defaults to null (empty string ptr)
+                                    _ => 0,                // Reference types default to null (0)
+                                };
+                                instrs.push(LirInstr::I32Const(default_value));
+                            }
+                            instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
+                        }
+                        
+                        // Remove this class from initializing set
+                        self.initializing_classes.remove(type_name);
+                        
+                        // Restore old "self" binding and attribute offsets
+                        if let Some(old) = old_self {
+                            self.locals.insert("self".to_string(), old);
+                        } else {
+                            self.locals.remove("self");
+                        }
+                        self.attribute_offsets = old_attribute_offsets;
                     }
-                    self.attribute_offsets = old_attribute_offsets;
                     
                     // Leave the object pointer on the stack as the result
                     instrs.push(LirInstr::LocalGet(obj_local));
