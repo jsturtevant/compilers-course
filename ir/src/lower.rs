@@ -3,6 +3,14 @@ use crate::hir::*;
 use crate::lir::*;
 use std::collections::HashMap;
 
+/// Information about a class needed for object allocation
+#[derive(Debug, Clone)]
+pub struct ClassMetadata {
+    pub class_tag: usize,
+    pub object_size: u32,  // Total size in bytes (header + attributes)
+    pub attributes: Vec<(String, TypeId, u32)>,  // (name, type, offset)
+}
+
 /// Lowering context for HIR -> LIR transformation
 pub struct LoweringContext {
     next_local_id: u32,
@@ -14,6 +22,12 @@ pub struct LoweringContext {
     string_literals: Vec<String>,
     /// Attribute offsets for the current class (name -> byte offset from object start)
     attribute_offsets: HashMap<String, u32>,
+    /// Map from class name to class tag (for case dispatch)
+    class_tags: HashMap<String, usize>,
+    /// Map from class name to parent class name (for inheritance checking)
+    class_parents: HashMap<String, Option<String>>,
+    /// Map from class name to class metadata (for new expression)
+    class_metadata: HashMap<String, ClassMetadata>,
 }
 
 impl LoweringContext {
@@ -24,6 +38,9 @@ impl LoweringContext {
             local_types: Vec::new(),
             string_literals: Vec::new(),
             attribute_offsets: HashMap::new(),
+            class_tags: HashMap::new(),
+            class_parents: HashMap::new(),
+            class_metadata: HashMap::new(),
         }
     }
 
@@ -70,6 +87,76 @@ impl LoweringContext {
     pub fn lower_program(&mut self, program: &HirProgram) -> LirProgram {
         let mut functions = Vec::new();
         let mut vtables = Vec::new();
+
+        // Build class tag and parent maps for case dispatch
+        for class in &program.classes {
+            self.class_tags.insert(class.name.clone(), class.class_tag);
+            self.class_parents.insert(class.name.clone(), class.parent.clone());
+            
+            // Build class metadata for new expression
+            let mut offset = 12u32; // Object header is 12 bytes
+            let mut attrs = Vec::new();
+            for attr in &class.attributes {
+                attrs.push((attr.name.clone(), attr.typ.clone(), offset));
+                offset += 4; // Each attribute is 4 bytes
+            }
+            self.class_metadata.insert(class.name.clone(), ClassMetadata {
+                class_tag: class.class_tag,
+                object_size: offset, // 12 + 4*num_attributes
+                attributes: attrs,
+            });
+        }
+        // Add built-in classes with their tags (Object=0, IO=1, String=2, Int=3, Bool=4)
+        // These may not be in the program but are needed for case matching
+        if !self.class_tags.contains_key("Object") {
+            self.class_tags.insert("Object".to_string(), 0);
+            self.class_parents.insert("Object".to_string(), None);
+            self.class_metadata.insert("Object".to_string(), ClassMetadata {
+                class_tag: 0,
+                object_size: 12, // Just header, no attributes
+                attributes: Vec::new(),
+            });
+        }
+        if !self.class_tags.contains_key("IO") {
+            self.class_tags.insert("IO".to_string(), 1);
+            self.class_parents.insert("IO".to_string(), Some("Object".to_string()));
+            self.class_metadata.insert("IO".to_string(), ClassMetadata {
+                class_tag: 1,
+                object_size: 12,
+                attributes: Vec::new(),
+            });
+        }
+        if !self.class_tags.contains_key("String") {
+            self.class_tags.insert("String".to_string(), 2);
+            self.class_parents.insert("String".to_string(), Some("Object".to_string()));
+            // String has special layout: header + length + data pointer
+            self.class_metadata.insert("String".to_string(), ClassMetadata {
+                class_tag: 2,
+                object_size: 20, // 12 header + 4 length + 4 data ptr
+                attributes: vec![
+                    ("length".to_string(), TypeId::Int, 12),
+                    ("data".to_string(), TypeId::Int, 16),
+                ],
+            });
+        }
+        if !self.class_tags.contains_key("Int") {
+            self.class_tags.insert("Int".to_string(), 3);
+            self.class_parents.insert("Int".to_string(), Some("Object".to_string()));
+            self.class_metadata.insert("Int".to_string(), ClassMetadata {
+                class_tag: 3,
+                object_size: 16, // 12 header + 4 value
+                attributes: vec![("value".to_string(), TypeId::Int, 12)],
+            });
+        }
+        if !self.class_tags.contains_key("Bool") {
+            self.class_tags.insert("Bool".to_string(), 4);
+            self.class_parents.insert("Bool".to_string(), Some("Object".to_string()));
+            self.class_metadata.insert("Bool".to_string(), ClassMetadata {
+                class_tag: 4,
+                object_size: 16, // 12 header + 4 value
+                attributes: vec![("value".to_string(), TypeId::Bool, 12)],
+            });
+        }
 
         // Lower each class
         for class in &program.classes {
@@ -376,10 +463,58 @@ impl LoweringContext {
 
             HirExpr::New { type_name, .. } => {
                 let mut instrs = Vec::new();
-                // TODO: Calculate object size, allocate memory, initialize
                 instrs.push(LirInstr::comment(format!("new {}", type_name)));
-                instrs.push(LirInstr::I32Const(16)); // Placeholder size
-                instrs.push(LirInstr::Alloc);
+                
+                // Look up class metadata
+                if let Some(metadata) = self.class_metadata.get(type_name).cloned() {
+                    // Allocate a temporary local to hold the object pointer
+                    // alloc_local returns the correct WASM local index
+                    let obj_local = self.alloc_local(LirType::I32);
+                    
+                    // Allocate memory for the object
+                    instrs.push(LirInstr::I32Const(metadata.object_size as i32));
+                    instrs.push(LirInstr::Alloc);
+                    instrs.push(LirInstr::LocalTee(obj_local));
+                    
+                    // Store class tag at offset 0
+                    instrs.push(LirInstr::I32Const(metadata.class_tag as i32));
+                    instrs.push(LirInstr::I32Store { offset: 0, align: 4 });
+                    
+                    // Store object size at offset 4
+                    instrs.push(LirInstr::LocalGet(obj_local));
+                    instrs.push(LirInstr::I32Const(metadata.object_size as i32));
+                    instrs.push(LirInstr::I32Store { offset: 4, align: 4 });
+                    
+                    // Store vtable pointer at offset 8 (0 for now, vtables not fully implemented)
+                    instrs.push(LirInstr::LocalGet(obj_local));
+                    instrs.push(LirInstr::I32Const(0)); // TODO: vtable address
+                    instrs.push(LirInstr::I32Store { offset: 8, align: 4 });
+                    
+                    // Initialize attributes to default values based on type
+                    for (attr_name, attr_type, attr_offset) in &metadata.attributes {
+                        instrs.push(LirInstr::comment(format!("init attr {}: {:?}", attr_name, attr_type)));
+                        instrs.push(LirInstr::LocalGet(obj_local));
+                        
+                        // Default value based on type
+                        let default_value = match attr_type {
+                            TypeId::Int => 0,      // Int defaults to 0
+                            TypeId::Bool => 0,     // Bool defaults to false
+                            TypeId::String => 0,   // String defaults to null (empty string ptr)
+                            _ => 0,                // Reference types default to null (0)
+                        };
+                        instrs.push(LirInstr::I32Const(default_value));
+                        instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
+                    }
+                    
+                    // Leave the object pointer on the stack as the result
+                    instrs.push(LirInstr::LocalGet(obj_local));
+                } else {
+                    // Fallback for unknown types (shouldn't happen with proper semantic analysis)
+                    instrs.push(LirInstr::comment(format!("WARNING: unknown type {}", type_name)));
+                    instrs.push(LirInstr::I32Const(12)); // Minimum object size (header only)
+                    instrs.push(LirInstr::Alloc);
+                }
+                
                 instrs
             }
 
@@ -428,20 +563,172 @@ impl LoweringContext {
             HirExpr::Case { expr, branches, .. } => {
                 let mut instrs = Vec::new();
                 
-                // Evaluate case expression
+                // Evaluate case expression - get object pointer on stack
                 instrs.extend(self.lower_expr(expr));
                 
-                // TODO: Implement type-based dispatch for case branches
-                // For now, just execute first branch
-                instrs.push(LirInstr::comment("Case expression (simplified)"));
-                if let Some(first_branch) = branches.first() {
-                    let local_id = self.register_local(first_branch.name.clone(), LirType::I32);
-                    instrs.push(LirInstr::LocalSet(local_id));
-                    instrs.extend(self.lower_expr(&first_branch.expr));
+                // Store object pointer in a local for reuse
+                let obj_local = self.alloc_local(LirType::I32);
+                instrs.push(LirInstr::LocalTee(obj_local));
+                
+                // Read class tag from object (at offset 0)
+                instrs.push(LirInstr::I32Load { offset: 0, align: 4 });
+                let tag_local = self.alloc_local(LirType::I32);
+                instrs.push(LirInstr::LocalSet(tag_local));
+                
+                instrs.push(LirInstr::comment("Case expression - type dispatch"));
+                
+                if branches.is_empty() {
+                    // No branches - abort
+                    instrs.push(LirInstr::Unreachable);
+                    return instrs;
                 }
+                
+                // Sort branches by specificity (more derived types first)
+                // We sort by inheritance depth (deeper = more specific)
+                let mut sorted_branches: Vec<_> = branches.iter().collect();
+                sorted_branches.sort_by(|a, b| {
+                    let depth_a = self.get_inheritance_depth(&a.type_name);
+                    let depth_b = self.get_inheritance_depth(&b.type_name);
+                    depth_b.cmp(&depth_a) // Reverse order: deeper first
+                });
+                
+                // Get all conforming tags for each branch type
+                // For each branch type, collect all class tags that conform to it
+                let branch_tag_sets: Vec<(_, Vec<usize>)> = sorted_branches.iter()
+                    .map(|branch| {
+                        let conforming_tags = self.get_conforming_tags(&branch.type_name);
+                        (*branch, conforming_tags)
+                    })
+                    .collect();
+                
+                // Generate nested if/else chain
+                // Structure: if (tag matches branch1) { body1 } else if (tag matches branch2) { body2 } else { abort }
+                let case_instrs = self.build_case_dispatch(
+                    obj_local,
+                    tag_local,
+                    &branch_tag_sets,
+                );
+                
+                instrs.extend(case_instrs);
                 instrs
             }
         }
+    }
+    
+    /// Get inheritance depth (Object = 0, IO = 1, etc.)
+    fn get_inheritance_depth(&self, class_name: &str) -> usize {
+        let mut depth = 0;
+        let mut current = class_name.to_string();
+        while let Some(parent) = self.class_parents.get(&current).and_then(|p| p.clone()) {
+            depth += 1;
+            current = parent;
+        }
+        depth
+    }
+    
+    /// Get all class tags that conform to (are subtypes of) the given type
+    fn get_conforming_tags(&self, type_name: &str) -> Vec<usize> {
+        let mut tags = Vec::new();
+        
+        // Check all known classes to see if they conform to type_name
+        for (class_name, &tag) in &self.class_tags {
+            if self.class_conforms(class_name, type_name) {
+                tags.push(tag);
+            }
+        }
+        
+        tags
+    }
+    
+    /// Check if class1 conforms to class2 (class1 is subtype of class2)
+    fn class_conforms(&self, class1: &str, class2: &str) -> bool {
+        if class1 == class2 {
+            return true;
+        }
+        
+        let mut current = class1.to_string();
+        while let Some(parent) = self.class_parents.get(&current).and_then(|p| p.clone()) {
+            if parent == class2 {
+                return true;
+            }
+            current = parent;
+        }
+        
+        false
+    }
+    
+    /// Build case dispatch as nested IfElse instructions
+    fn build_case_dispatch(
+        &mut self,
+        obj_local: u32,
+        tag_local: u32,
+        branches: &[(&CaseBranch, Vec<usize>)],
+    ) -> Vec<LirInstr> {
+        if branches.is_empty() {
+            // No match - call abort
+            return vec![
+                LirInstr::comment("Case no-match: abort"),
+                LirInstr::Unreachable,
+            ];
+        }
+        
+        let (branch, conforming_tags) = &branches[0];
+        let remaining = &branches[1..];
+        
+        // Build condition: check if tag matches any conforming tag
+        // (tag == tag1) || (tag == tag2) || ...
+        let cond_instrs = self.build_tag_check_condition(tag_local, conforming_tags);
+        
+        // Build then branch: bind variable and execute body
+        let mut then_instrs = Vec::new();
+        // Bind the case variable to the object
+        let var_local = self.register_local(branch.name.clone(), LirType::I32);
+        then_instrs.push(LirInstr::LocalGet(obj_local));
+        then_instrs.push(LirInstr::LocalSet(var_local));
+        // Execute branch body
+        then_instrs.extend(self.lower_expr(&branch.expr));
+        
+        // Build else branch: try remaining branches
+        let else_instrs = self.build_case_dispatch(obj_local, tag_local, remaining);
+        
+        // Combine into IfElse
+        let mut result = cond_instrs;
+        result.push(LirInstr::IfElse {
+            then_instrs,
+            else_instrs,
+            result_type: Some(LirType::I32), // Case always returns i32 (object pointer)
+        });
+        
+        result
+    }
+    
+    /// Build condition checking if tag matches any of the given tags
+    fn build_tag_check_condition(&self, tag_local: u32, tags: &[usize]) -> Vec<LirInstr> {
+        if tags.is_empty() {
+            return vec![LirInstr::I32Const(0)]; // Never matches
+        }
+        
+        let mut instrs = Vec::new();
+        
+        // Build: (tag == tags[0]) || (tag == tags[1]) || ...
+        // In WASM: we compute each comparison and OR them together
+        
+        // First comparison
+        instrs.push(LirInstr::LocalGet(tag_local));
+        instrs.push(LirInstr::I32Const(tags[0] as i32));
+        instrs.push(LirInstr::I32Eq);
+        
+        // Additional comparisons with OR
+        for &tag in &tags[1..] {
+            instrs.push(LirInstr::LocalGet(tag_local));
+            instrs.push(LirInstr::I32Const(tag as i32));
+            instrs.push(LirInstr::I32Eq);
+            // OR with previous result: (a || b) = (a + b) > 0, or use i32.or
+            // Actually for booleans, we can use i32.or
+            instrs.push(LirInstr::I32Or);
+        }
+        
+        instrs
     }
 }
 

@@ -351,3 +351,52 @@ cargo run --bin cool-wasm -- cool-support/examples/arith.cl -o /tmp/arith.wasm &
 ```
 
 ---
+
+### Proper `new` Expression Codegen — 2025-01-XX
+
+**Status:** Complete — `new Type` expression now properly allocates and initializes objects.
+
+**Problem:** The `new Type` expression was hardcoded to allocate 16 bytes and return a pointer, without:
+- Calculating correct object size based on class attributes
+- Initializing the object header (class_tag, size, vtable_ptr)
+- Initializing attributes to their default values
+
+**Implementation:**
+
+1. **Added ClassMetadata struct** to `ir/src/lower.rs`:
+   - Stores class_tag, object_size, and attributes with their types and offsets
+   - Built during `lower_program` for all classes including built-ins
+
+2. **Updated `lower_program`** to populate class metadata:
+   - For user-defined classes: extracts attributes from HirClass
+   - For built-in classes: Object, IO, String, Int, Bool have predefined layouts
+
+3. **Reimplemented `HirExpr::New` lowering:**
+   - Looks up ClassMetadata for the target type
+   - Allocates correct object size (12-byte header + 4 bytes per attribute)
+   - Stores class_tag at offset 0
+   - Stores object size at offset 4
+   - Stores vtable_ptr at offset 8 (0 for now)
+   - Initializes each attribute to default value based on type:
+     - Int → 0
+     - Bool → 0 (false)
+     - String/references → 0 (null)
+   - Returns object pointer on stack
+
+**Object Layout:**
+```
+Offset 0:  class_tag (i32)
+Offset 4:  size (i32)
+Offset 8:  vtable_ptr (i32)
+Offset 12+: attributes (4 bytes each)
+```
+
+**Files Modified:**
+- `ir/src/lower.rs` — Added ClassMetadata, populated in lower_program, used in New expression
+
+**Validation:**
+- All 17 compilable samples produce valid WASM
+- `hello_world.cl` runs correctly with wasmtime
+- `book_list.cl`, `sort_list.cl`, `lam.cl` now compile (previously had issues)
+
+---
