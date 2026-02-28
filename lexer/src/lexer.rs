@@ -28,7 +28,44 @@ pub enum Token {
     #[token("SELF_TYPE")]
     SelfType,
 
-    #[regex(r#""([^"\\\n]|\\[^0\n]|\\[ \t]*\n)*""#, callback = |lex| lex.slice().to_string())]
+    #[regex(r#""([^"\\\n]|\\[^0\n]|\\[ \t]*\n)*""#, callback = |lex| {
+        let s = lex.slice();
+        // Strip surrounding quotes
+        let inner = &s[1..s.len()-1];
+        // Process escape sequences
+        let mut result = String::new();
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(&next) = chars.peek() {
+                    chars.next();
+                    match next {
+                        'n' => result.push('\n'),
+                        't' => result.push('\t'),
+                        'b' => result.push('\x08'),
+                        'f' => result.push('\x0c'),
+                        '\\' => result.push('\\'),
+                        '"' => result.push('"'),
+                        '\n' => {
+                            // Line continuation: skip whitespace on next line
+                            while chars.peek().map_or(false, |&c| c == ' ' || c == '\t') {
+                                chars.next();
+                            }
+                        }
+                        _ => {
+                            // For unrecognized escapes, just use the char itself
+                            result.push(next);
+                        }
+                    }
+                } else {
+                    result.push(c);
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    })]
     String(String),
 
     // keywords
