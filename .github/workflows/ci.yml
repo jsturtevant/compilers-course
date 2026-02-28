@@ -47,6 +47,8 @@ jobs:
       env:
         # Avoid PDB server contention on Windows (LNK1318 errors)
         CARGO_BUILD_JOBS: 1
+        # Force single codegen unit to avoid parallel PDB writes
+        CARGO_PROFILE_DEV_CODEGEN_UNITS: 1
 
     - name: Build all crates (Unix)
       if: runner.os != 'Windows'
