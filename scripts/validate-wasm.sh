@@ -6,7 +6,7 @@
 # Compiles .cl files to .wasm and validates them.
 #
 # Usage: ./scripts/validate-wasm.sh
-# Or:    ./scripts/validate-wasm.sh cool-support/examples/arith.cl
+# Or:    ./scripts/validate-wasm.sh samples/arith.cl
 
 set -euo pipefail
 
