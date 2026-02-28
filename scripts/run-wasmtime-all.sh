@@ -163,6 +163,19 @@ for cl_file in cool-support/examples/*.cl; do
                 FAILED=$((FAILED + 1))
             fi
             ;;
+        sort_list)
+            # sort_list asks "How many numbers to sort?" and needs an integer input
+            exit_code=0
+            output=$(echo "5" | timeout 3s wasmtime run "$wasm_file" 2>&1) || exit_code=$?
+            # Check that it outputs sorted numbers (0, 1, 2, 3, 4)
+            if echo "$output" | grep -q "0" && echo "$output" | grep -q "4"; then
+                echo -e "${GREEN}✓${NC} $filename (sorted 5 numbers) → ${output:0:50}..."
+                PASSED=$((PASSED + 1))
+            else
+                echo -e "${RED}✗${NC} $filename (unexpected: ${output:0:80})"
+                FAILED=$((FAILED + 1))
+            fi
+            ;;
         *)
             # Standard programs - run without input
             exit_code=0

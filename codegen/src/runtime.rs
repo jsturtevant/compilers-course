@@ -9,7 +9,7 @@
 //! For MVP, IO is implemented using WASI (fd_read/fd_write).
 
 use crate::wasm::WasmModule;
-use wasm_encoder::{Function, Instruction, MemArg, ValType};
+use wasm_encoder::{BlockType, Function, Instruction, MemArg, ValType};
 
 /// Runtime function IDs
 ///
@@ -394,8 +394,8 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
     func.instruction(&Instruction::I32Eq);
     func.instruction(&Instruction::If(BlockType::Empty));
     {
-        // Write '0' to buffer
-        func.instruction(&Instruction::I32Const(buffer));
+        // Write '0' to buffer+10 (to align with non-zero case that writes backwards from buffer+10)
+        func.instruction(&Instruction::I32Const(buffer + 10));
         func.instruction(&Instruction::I32Const(48)); // '0'
         func.instruction(&Instruction::I32Store8(wasm_encoder::MemArg {
             offset: 0,
@@ -729,16 +729,203 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
 /// IO.in_int() -> Int
 ///
 /// Reads a string from stdin and parses it as an integer.
-/// Simplified implementation for MVP.
-fn add_io_in_int(module: &mut WasmModule, _wasi_fd_read: u32) -> u32 {
+/// Uses WASI fd_read to read characters, then parses the decimal number.
+fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
     // (self: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
 
-    // For MVP: stub - return 0
-    // TODO: Implement proper parsing
-    let mut func = Function::new([]);
+    // Locals:
+    // 0 = self (parameter)
+    // 1 = result (accumulated integer)
+    // 2 = char (current character)
+    // 3 = nread (bytes read from fd_read)
+    // 4 = is_negative flag
+    // 5 = started (have we seen a digit yet)
+    let mut func = Function::new([
+        (1, ValType::I32), // result
+        (1, ValType::I32), // char
+        (1, ValType::I32), // nread
+        (1, ValType::I32), // is_negative
+        (1, ValType::I32), // started
+    ]);
+    
+    // Initialize result = 0
     func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(1));
+    
+    // Initialize is_negative = 0
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(4));
+    
+    // Initialize started = 0
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::LocalSet(5));
+    
+    // Set up iovec at scratch buffer 0x3100:
+    // iovec.buf = 0x3100 (read single byte at a time)
+    // iovec.len = 1
+    func.instruction(&Instruction::I32Const(0x3100));
+    func.instruction(&Instruction::I32Const(0x3108));
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    func.instruction(&Instruction::I32Const(0x3104));
+    func.instruction(&Instruction::I32Const(1));
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    
+    // Main read loop
+    func.instruction(&Instruction::Block(BlockType::Empty));
+    func.instruction(&Instruction::Loop(BlockType::Empty));
+    {
+        // Call fd_read(stdin=0, iovec_ptr=0x3100, iovec_count=1, nread_ptr=0x310C)
+        func.instruction(&Instruction::I32Const(0)); // stdin
+        func.instruction(&Instruction::I32Const(0x3100)); // iovec ptr
+        func.instruction(&Instruction::I32Const(1)); // iovec count
+        func.instruction(&Instruction::I32Const(0x310C)); // nread ptr
+        func.instruction(&Instruction::Call(wasi_fd_read));
+        func.instruction(&Instruction::Drop);
+        
+        // Load nread
+        func.instruction(&Instruction::I32Const(0x310C));
+        func.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::LocalSet(3));
+        
+        // If nread == 0 (EOF), exit loop
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // Load the character we just read
+        func.instruction(&Instruction::I32Const(0x3108));
+        func.instruction(&Instruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::LocalSet(2));
+        
+        // If char == 10 (newline), exit loop
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Const(10));
+        func.instruction(&Instruction::I32Eq);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // If char == 13 (carriage return), exit loop
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Const(13));
+        func.instruction(&Instruction::I32Eq);
+        func.instruction(&Instruction::BrIf(1));
+        
+        // Check for '-' (minus sign) at start
+        func.instruction(&Instruction::LocalGet(5)); // started
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::If(BlockType::Empty));
+        {
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(45)); // '-'
+            func.instruction(&Instruction::I32Eq);
+            func.instruction(&Instruction::If(BlockType::Empty));
+            {
+                func.instruction(&Instruction::I32Const(1));
+                func.instruction(&Instruction::LocalSet(4)); // is_negative = 1
+                func.instruction(&Instruction::I32Const(1));
+                func.instruction(&Instruction::LocalSet(5)); // started = 1
+                func.instruction(&Instruction::Br(3)); // continue loop
+            }
+            func.instruction(&Instruction::End);
+        }
+        func.instruction(&Instruction::End);
+        
+        // Skip leading spaces and tabs
+        func.instruction(&Instruction::LocalGet(5)); // started
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::If(BlockType::Empty));
+        {
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(32)); // space
+            func.instruction(&Instruction::I32Eq);
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(9)); // tab
+            func.instruction(&Instruction::I32Eq);
+            func.instruction(&Instruction::I32Or);
+            func.instruction(&Instruction::If(BlockType::Empty));
+            {
+                func.instruction(&Instruction::Br(3)); // continue loop
+            }
+            func.instruction(&Instruction::End);
+        }
+        func.instruction(&Instruction::End);
+        
+        // Check if char is a digit ('0' to '9')
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Const(48)); // '0'
+        func.instruction(&Instruction::I32GeU);
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Const(57)); // '9'
+        func.instruction(&Instruction::I32LeU);
+        func.instruction(&Instruction::I32And);
+        func.instruction(&Instruction::If(BlockType::Empty));
+        {
+            // Mark that we've started reading digits
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(5));
+            
+            // result = result * 10 + (char - '0')
+            func.instruction(&Instruction::LocalGet(1));
+            func.instruction(&Instruction::I32Const(10));
+            func.instruction(&Instruction::I32Mul);
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(48)); // '0'
+            func.instruction(&Instruction::I32Sub);
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalSet(1));
+            
+            // Continue loop
+            func.instruction(&Instruction::Br(1));
+        }
+        func.instruction(&Instruction::Else);
+        {
+            // Non-digit after we started: stop parsing
+            // (COOL spec: read until first non-digit)
+            func.instruction(&Instruction::LocalGet(5));
+            func.instruction(&Instruction::If(BlockType::Empty));
+            {
+                func.instruction(&Instruction::Br(3)); // exit loop
+            }
+            func.instruction(&Instruction::End);
+            // Haven't started yet, skip this character
+            func.instruction(&Instruction::Br(1));
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End); // end loop
+    func.instruction(&Instruction::End); // end block
+    
+    // Apply negation if needed
+    func.instruction(&Instruction::LocalGet(4)); // is_negative
+    func.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
+    {
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalGet(1));
+        func.instruction(&Instruction::I32Sub);
+    }
+    func.instruction(&Instruction::Else);
+    {
+        func.instruction(&Instruction::LocalGet(1));
+    }
+    func.instruction(&Instruction::End);
+    
     func.instruction(&Instruction::End);
 
     module.add_code(func);
