@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
-use parser::ast::Class;
 use crate::SemanticError;
+use parser::ast::Class;
+use std::collections::{HashMap, HashSet};
 
 /// ClassInfo stores information about a class in the hierarchy
 #[derive(Debug, Clone)]
@@ -34,26 +34,41 @@ impl ClassHierarchy {
     /// Add COOL's built-in classes: Object, IO, String, Int, Bool
     pub fn add_builtins(&mut self) {
         // Object is the root of the hierarchy
-        self.add_builtin_class("Object", None, vec![], vec![
-            ("abort", vec![], "Object"),
-            ("type_name", vec![], "String"),
-            ("copy", vec![], "SELF_TYPE"),
-        ]);
+        self.add_builtin_class(
+            "Object",
+            None,
+            vec![],
+            vec![
+                ("abort", vec![], "Object"),
+                ("type_name", vec![], "String"),
+                ("copy", vec![], "SELF_TYPE"),
+            ],
+        );
 
         // IO inherits from Object
-        self.add_builtin_class("IO", Some("Object"), vec![], vec![
-            ("out_string", vec!["String"], "SELF_TYPE"),
-            ("out_int", vec!["Int"], "SELF_TYPE"),
-            ("in_string", vec![], "String"),
-            ("in_int", vec![], "Int"),
-        ]);
+        self.add_builtin_class(
+            "IO",
+            Some("Object"),
+            vec![],
+            vec![
+                ("out_string", vec!["String"], "SELF_TYPE"),
+                ("out_int", vec!["Int"], "SELF_TYPE"),
+                ("in_string", vec![], "String"),
+                ("in_int", vec![], "Int"),
+            ],
+        );
 
         // String inherits from Object
-        self.add_builtin_class("String", Some("Object"), vec![], vec![
-            ("length", vec![], "Int"),
-            ("concat", vec!["String"], "String"),
-            ("substr", vec!["Int", "Int"], "String"),
-        ]);
+        self.add_builtin_class(
+            "String",
+            Some("Object"),
+            vec![],
+            vec![
+                ("length", vec![], "Int"),
+                ("concat", vec!["String"], "String"),
+                ("substr", vec!["Int", "Int"], "String"),
+            ],
+        );
 
         // Int inherits from Object (no additional methods)
         self.add_builtin_class("Int", Some("Object"), vec![], vec![]);
@@ -115,7 +130,11 @@ impl ClassHierarchy {
         // Check for invalid inheritance (can't inherit from Int, String, Bool)
         for class in classes {
             if let Some(ref parent) = class.parent {
-                if parent == "Int" || parent == "String" || parent == "Bool" || parent == "SELF_TYPE" {
+                if parent == "Int"
+                    || parent == "String"
+                    || parent == "Bool"
+                    || parent == "SELF_TYPE"
+                {
                     errors.push(SemanticError::InvalidInheritance {
                         class: class.name.clone(),
                         parent: parent.clone(),
@@ -141,9 +160,7 @@ impl ClassHierarchy {
                         attributes.insert(attr.name.clone(), attr.attr_type.clone());
                     }
                     parser::ast::Feature::Method(method) => {
-                        let param_types = method.formals.iter()
-                            .map(|f| f.typ.clone())
-                            .collect();
+                        let param_types = method.formals.iter().map(|f| f.typ.clone()).collect();
                         methods.insert(
                             method.name.clone(),
                             MethodSignature {
@@ -290,10 +307,11 @@ impl ClassHierarchy {
     pub fn class_exists(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
-    
+
     /// Get the parent class name for a given class
     pub fn get_parent(&self, class_name: &str) -> Option<String> {
-        self.classes.get(class_name)
+        self.classes
+            .get(class_name)
             .and_then(|info| info.parent.clone())
     }
 
@@ -301,7 +319,7 @@ impl ClassHierarchy {
     pub fn get_all_attributes(&self, class_name: &str) -> HashMap<String, String> {
         let mut attributes = HashMap::new();
         let mut current = class_name;
-        
+
         // Walk up the inheritance chain collecting attributes
         let mut ancestors = Vec::new();
         while let Some(class_info) = self.classes.get(current) {
@@ -312,7 +330,7 @@ impl ClassHierarchy {
                 break;
             }
         }
-        
+
         // Add attributes from parent to child (so child can override)
         for ancestor in ancestors.iter().rev() {
             if let Some(class_info) = self.classes.get(*ancestor) {
@@ -321,7 +339,7 @@ impl ClassHierarchy {
                 }
             }
         }
-        
+
         attributes
     }
 
@@ -349,7 +367,7 @@ impl ClassHierarchy {
         }
         None
     }
-    
+
     /// Find which class defines a method (walking up inheritance chain)
     pub fn get_method_defining_class(&self, class_name: &str, method_name: &str) -> Option<String> {
         let mut current = class_name;
@@ -373,7 +391,7 @@ impl ClassHierarchy {
     /// Get all methods for a class including inherited ones
     pub fn get_all_methods(&self, class_name: &str) -> Vec<(String, MethodSignature)> {
         let mut current = class_name;
-        
+
         // Walk up the inheritance chain collecting methods
         let mut ancestors = Vec::new();
         while let Some(class_info) = self.classes.get(current) {
@@ -384,18 +402,18 @@ impl ClassHierarchy {
                 break;
             }
         }
-        
+
         // Collect methods in vtable order: parent methods first, then child methods
         // Methods are sorted alphabetically within each class for determinism
         // Overridden methods keep their original slot
         let mut indexed: Vec<_> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        
+
         for ancestor in ancestors.iter().rev() {
             if let Some(class_info) = self.classes.get(*ancestor) {
                 let mut class_methods: Vec<_> = class_info.methods.iter().collect();
                 class_methods.sort_by_key(|(name, _)| (*name).clone());
-                
+
                 for (method_name, method_sig) in class_methods {
                     if !seen.contains(method_name) {
                         seen.insert(method_name.clone());
@@ -404,7 +422,7 @@ impl ClassHierarchy {
                 }
             }
         }
-        
+
         indexed
     }
 }
@@ -461,7 +479,7 @@ mod tests {
         assert!(hierarchy.get_method("IO", "abort").is_some());
         assert!(hierarchy.get_method("IO", "type_name").is_some());
         assert!(hierarchy.get_method("IO", "copy").is_some());
-        
+
         // And have its own methods
         assert!(hierarchy.get_method("IO", "out_string").is_some());
         assert!(hierarchy.get_method("IO", "in_int").is_some());

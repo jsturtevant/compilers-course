@@ -51,8 +51,8 @@ pub struct VTable {
 /// LIR Type (WASM types)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LirType {
-    I32, // 32-bit integer (objects are pointers)
-    I64, // 64-bit integer (future use)
+    I32,  // 32-bit integer (objects are pointers)
+    I64,  // 64-bit integer (future use)
     Void, // No return value
 }
 
@@ -66,7 +66,7 @@ pub enum LirInstr {
     // Stack operations
     /// Push constant onto stack
     I32Const(i32),
-    
+
     /// Duplicate top of stack
     Dup,
 
@@ -105,7 +105,7 @@ pub enum LirInstr {
     // Boolean/bitwise operations
     /// Equal to zero (logical not)
     I32Eqz,
-    
+
     /// Bitwise OR (used for boolean OR)
     I32Or,
 
@@ -128,10 +128,16 @@ pub enum LirInstr {
 
     // Memory operations
     /// Load i32 from memory at address (with offset and alignment)
-    I32Load { offset: u32, align: u32 },
+    I32Load {
+        offset: u32,
+        align: u32,
+    },
 
     /// Store i32 to memory at address (with offset and alignment)
-    I32Store { offset: u32, align: u32 },
+    I32Store {
+        offset: u32,
+        align: u32,
+    },
 
     /// Allocate memory (bump allocator)
     /// Stack: [size] -> [ptr]
@@ -151,13 +157,17 @@ pub enum LirInstr {
     JumpIfNot(Label),
 
     /// Block start (WASM block)
-    Block { label: Label },
+    Block {
+        label: Label,
+    },
 
     /// Block end
     End,
 
     /// Loop start (WASM loop)
-    Loop { label: Label },
+    Loop {
+        label: Label,
+    },
 
     /// Branch to label (WASM br)
     Br(u32),
@@ -192,9 +202,9 @@ pub enum LirInstr {
 
     /// Indirect function call via vtable
     /// Stack: [object_ptr, arg1, ..., argN] -> [result]
-    CallIndirect { 
-        type_index: u32, 
-        method_index: u32 
+    CallIndirect {
+        type_index: u32,
+        method_index: u32,
     },
 
     /// Return from function

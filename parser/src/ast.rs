@@ -84,7 +84,7 @@ pub enum Expr {
     Le(Box<Expr>, Box<Expr>),
     Eq(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
-    Negate(Box<Expr>),  // Arithmetic negation (~)
+    Negate(Box<Expr>), // Arithmetic negation (~)
     Paren(Box<Expr>),
     Id(String),
     Integer(i32),

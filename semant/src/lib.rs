@@ -1,24 +1,56 @@
-pub mod symbol_table;
 pub mod class_hierarchy;
+pub mod symbol_table;
 pub mod types;
 
-pub use symbol_table::ScopeStack as SymbolTable;
 pub use class_hierarchy::ClassHierarchy;
+pub use symbol_table::ScopeStack as SymbolTable;
 pub use types::{Type, TypeChecker};
 
 use parser::ast::Program;
 
 #[derive(Debug, Clone)]
 pub enum SemanticError {
-    DuplicateClass { name: String, line: usize },
-    UndefinedType { name: String, line: usize },
-    CyclicInheritance { path: Vec<String> },
-    UndefinedVariable { name: String, line: usize },
-    UndefinedMethod { class: String, method: String, line: usize },
-    TypeMismatch { expected: String, found: String, line: usize },
-    InvalidInheritance { class: String, parent: String, line: usize },
-    RedefinedAttribute { class: String, attr: String, line: usize },
-    InvalidOverride { class: String, method: String, reason: String, line: usize },
+    DuplicateClass {
+        name: String,
+        line: usize,
+    },
+    UndefinedType {
+        name: String,
+        line: usize,
+    },
+    CyclicInheritance {
+        path: Vec<String>,
+    },
+    UndefinedVariable {
+        name: String,
+        line: usize,
+    },
+    UndefinedMethod {
+        class: String,
+        method: String,
+        line: usize,
+    },
+    TypeMismatch {
+        expected: String,
+        found: String,
+        line: usize,
+    },
+    InvalidInheritance {
+        class: String,
+        parent: String,
+        line: usize,
+    },
+    RedefinedAttribute {
+        class: String,
+        attr: String,
+        line: usize,
+    },
+    InvalidOverride {
+        class: String,
+        method: String,
+        reason: String,
+        line: usize,
+    },
 }
 
 pub struct SemanticAnalyzer {
@@ -31,7 +63,7 @@ impl SemanticAnalyzer {
     pub fn new() -> Self {
         let mut class_hierarchy = ClassHierarchy::new();
         class_hierarchy.add_builtins();
-        
+
         SemanticAnalyzer {
             class_hierarchy,
             symbol_table: SymbolTable::new(),
@@ -82,7 +114,10 @@ impl SemanticAnalyzer {
             // Add all attributes (including inherited) to symbol table
             let all_attributes = self.class_hierarchy.get_all_attributes(&class.name);
             for (attr_name, attr_type) in &all_attributes {
-                if let Err(_) = self.symbol_table.add_variable(attr_name.clone(), attr_type.clone()) {
+                if let Err(_) = self
+                    .symbol_table
+                    .add_variable(attr_name.clone(), attr_type.clone())
+                {
                     errors.push(SemanticError::RedefinedAttribute {
                         class: class.name.clone(),
                         attr: attr_name.clone(),
@@ -99,7 +134,10 @@ impl SemanticAnalyzer {
 
                         // Add parameters to symbol table
                         for formal in &m.formals {
-                            if let Err(_) = self.symbol_table.add_variable(formal.name.clone(), formal.typ.clone()) {
+                            if let Err(_) = self
+                                .symbol_table
+                                .add_variable(formal.name.clone(), formal.typ.clone())
+                            {
                                 errors.push(SemanticError::RedefinedAttribute {
                                     class: class.name.clone(),
                                     attr: formal.name.clone(),
@@ -109,10 +147,18 @@ impl SemanticAnalyzer {
                         }
 
                         // Type check method body
-                        match self.type_checker.infer_type(&m.body, &self.class_hierarchy, &mut self.symbol_table) {
+                        match self.type_checker.infer_type(
+                            &m.body,
+                            &self.class_hierarchy,
+                            &mut self.symbol_table,
+                        ) {
                             Ok(body_type) => {
                                 let expected_type = types::Type::from_string(&m.return_type);
-                                if !self.type_checker.check_conformance(&body_type, &expected_type, &self.class_hierarchy) {
+                                if !self.type_checker.check_conformance(
+                                    &body_type,
+                                    &expected_type,
+                                    &self.class_hierarchy,
+                                ) {
                                     errors.push(SemanticError::TypeMismatch {
                                         expected: m.return_type.clone(),
                                         found: body_type.to_string(),
@@ -128,10 +174,18 @@ impl SemanticAnalyzer {
                     parser::ast::Feature::Attribute(a) => {
                         // Type check attribute initializer if present
                         if let Some(ref init) = a.init {
-                            match self.type_checker.infer_type(init, &self.class_hierarchy, &mut self.symbol_table) {
+                            match self.type_checker.infer_type(
+                                init,
+                                &self.class_hierarchy,
+                                &mut self.symbol_table,
+                            ) {
                                 Ok(init_type) => {
                                     let expected_type = types::Type::from_string(&a.attr_type);
-                                    if !self.type_checker.check_conformance(&init_type, &expected_type, &self.class_hierarchy) {
+                                    if !self.type_checker.check_conformance(
+                                        &init_type,
+                                        &expected_type,
+                                        &self.class_hierarchy,
+                                    ) {
                                         errors.push(SemanticError::TypeMismatch {
                                             expected: a.attr_type.clone(),
                                             found: init_type.to_string(),

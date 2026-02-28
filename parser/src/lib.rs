@@ -5,21 +5,18 @@ use lexer::Token;
 use logos::Logos;
 
 pub use ast::{
-    Program, Class, Feature, MethodFeature, AttributeFeature,
-    Formal, Expr, LetBinding, CaseBranch,
+    AttributeFeature, CaseBranch, Class, Expr, Feature, Formal, LetBinding, MethodFeature, Program,
 };
 
 /// Parse a COOL source string into a Program AST.
 /// Returns a vector of parse errors on failure.
 pub fn parse_source(src: &str) -> Result<Program, Vec<String>> {
-    let token_iter = Token::lexer(src)
-        .spanned()
-        .map(|(tok, span)| match tok {
-            Ok(tok) => (tok, SimpleSpan::from(span)),
-            Err(()) => (Token::Error, span.into()),
-        });
-    let token_stream = Stream::from_iter(token_iter)
-        .map((0..src.len()).into(), |(t, s): (_, _)| (t, s));
+    let token_iter = Token::lexer(src).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, SimpleSpan::from(span)),
+        Err(()) => (Token::Error, span.into()),
+    });
+    let token_stream =
+        Stream::from_iter(token_iter).map((0..src.len()).into(), |(t, s): (_, _)| (t, s));
 
     parser_internal()
         .parse(token_stream)
@@ -28,7 +25,8 @@ pub fn parse_source(src: &str) -> Result<Program, Vec<String>> {
 }
 
 // Internal parser combinator - mirrors the one in main.rs
-fn parser_internal<'tokens, I>() -> impl chumsky::Parser<'tokens, I, ast::Program, extra::Err<Rich<'tokens, Token>>>
+fn parser_internal<'tokens, I>(
+) -> impl chumsky::Parser<'tokens, I, ast::Program, extra::Err<Rich<'tokens, Token>>>
 where
     I: chumsky::input::ValueInput<'tokens, Token = Token, Span = SimpleSpan>,
 {
@@ -293,7 +291,7 @@ where
         })
         .then_ignore(just(Token::Semicolon));
 
-     let class = just(Token::Class)
+    let class = just(Token::Class)
         .ignore_then(type_id)
         .then(just(Token::Inherits).ignore_then(type_id).or_not())
         .then(

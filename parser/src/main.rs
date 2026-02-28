@@ -343,14 +343,12 @@ mod tests {
     use ast::*;
 
     fn parse_program(src: &str) -> Result<Program, Vec<Rich<Token>>> {
-        let token_iter = Token::lexer(src)
-            .spanned()
-            .map(|(tok, span)| match tok {
-                Ok(tok) => (tok, SimpleSpan::from(span)),
-                Err(()) => (Token::Error, span.into()),
-            });
-        let token_stream = Stream::from_iter(token_iter)
-            .map((0..src.len()).into(), |(t, s): (_, _)| (t, s));
+        let token_iter = Token::lexer(src).spanned().map(|(tok, span)| match tok {
+            Ok(tok) => (tok, SimpleSpan::from(span)),
+            Err(()) => (Token::Error, span.into()),
+        });
+        let token_stream =
+            Stream::from_iter(token_iter).map((0..src.len()).into(), |(t, s): (_, _)| (t, s));
 
         parser().parse(token_stream).into_result()
     }
@@ -551,7 +549,11 @@ mod tests {
         let prog = result.unwrap();
         match &prog.classes[0].features[0] {
             Feature::Method(m) => match &m.body {
-                Expr::If { cond, then_branch, else_branch } => {
+                Expr::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } => {
                     matches!(**cond, Expr::True);
                     matches!(**then_branch, Expr::Integer(1));
                     matches!(**else_branch, Expr::Integer(2));
@@ -663,7 +665,12 @@ mod tests {
         let prog = result.unwrap();
         match &prog.classes[0].features[0] {
             Feature::Method(m) => match &m.body {
-                Expr::Dispatch { method, static_type, args, .. } => {
+                Expr::Dispatch {
+                    method,
+                    static_type,
+                    args,
+                    ..
+                } => {
                     assert_eq!(method, "method");
                     assert!(static_type.is_none());
                     assert_eq!(args.len(), 0);
@@ -682,7 +689,11 @@ mod tests {
         let prog = result.unwrap();
         match &prog.classes[0].features[0] {
             Feature::Method(m) => match &m.body {
-                Expr::Dispatch { static_type, method, .. } => {
+                Expr::Dispatch {
+                    static_type,
+                    method,
+                    ..
+                } => {
                     assert_eq!(static_type, &Some("Type".to_string()));
                     assert_eq!(method, "method");
                 }

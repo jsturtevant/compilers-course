@@ -4,12 +4,12 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    
+
     if args.len() < 2 {
         eprintln!("Usage: {} <file.cl>", args[0]);
         return ExitCode::from(1);
     }
-    
+
     let filename = &args[1];
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
@@ -18,7 +18,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    
+
     // Parse
     let ast = match parser::parse_source(&source) {
         Ok(ast) => ast,
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    
+
     // Semantic analysis
     let mut analyzer = semant::SemanticAnalyzer::new();
     match analyzer.analyze(&ast) {

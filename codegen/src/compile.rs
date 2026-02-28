@@ -39,8 +39,7 @@ pub fn compile_hir(hir: &HirProgram) -> Result<Vec<u8>, CompileError> {
     let lir = ctx.lower_program(hir);
 
     // Emit WASM from LIR (pass HIR for _start generation)
-    let wasm = emit::emit_module(&lir, hir)
-        .map_err(CompileError::EmissionError)?;
+    let wasm = emit::emit_module(&lir, hir).map_err(CompileError::EmissionError)?;
 
     Ok(wasm)
 }
@@ -48,10 +47,10 @@ pub fn compile_hir(hir: &HirProgram) -> Result<Vec<u8>, CompileError> {
 /// Compile HIR to WASM and write to file
 pub fn compile_to_file(hir: &HirProgram, output_path: &str) -> Result<(), CompileError> {
     let wasm = compile_hir(hir)?;
-    
+
     std::fs::write(output_path, wasm)
         .map_err(|e| CompileError::EmissionError(format!("Failed to write output: {}", e)))?;
-    
+
     Ok(())
 }
 
@@ -64,31 +63,27 @@ mod tests {
     fn test_compile_simple_program() {
         // Create a minimal HIR program with one class and one method
         let program = HirProgram {
-            classes: vec![
-                HirClass {
-                    name: "Main".to_string(),
-                    parent: None,
-                    class_tag: 0,
-                    attributes: vec![],
-                    methods: vec![
-                        HirMethod {
-                            name: "main".to_string(),
-                            formals: vec![],
-                            return_type: TypeId::Int,
-                            body: HirExpr::IntLiteral {
-                                value: 42,
-                                typ: TypeId::Int,
-                            },
-                            vtable_index: 0,
-                        }
-                    ],
-                }
-            ],
+            classes: vec![HirClass {
+                name: "Main".to_string(),
+                parent: None,
+                class_tag: 0,
+                attributes: vec![],
+                methods: vec![HirMethod {
+                    name: "main".to_string(),
+                    formals: vec![],
+                    return_type: TypeId::Int,
+                    body: HirExpr::IntLiteral {
+                        value: 42,
+                        typ: TypeId::Int,
+                    },
+                    vtable_index: 0,
+                }],
+            }],
         };
 
         let result = compile_hir(&program);
         assert!(result.is_ok());
-        
+
         let wasm = result.unwrap();
         // Check WASM magic number
         assert_eq!(&wasm[0..4], &[0x00, 0x61, 0x73, 0x6D]);

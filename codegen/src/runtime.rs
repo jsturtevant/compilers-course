@@ -44,10 +44,15 @@ pub const CLASS_NAME_TABLE_GLOBAL: u32 = 1;
 /// 2. Adds heap pointer global
 /// 3. Defines runtime functions for allocator, Object, IO, and String
 /// 4. Returns function indices for use in codegen
-pub fn add_runtime(module: &mut WasmModule, heap_start: u32, class_name_table_addr: u32, string_vtable_addr: u32) -> RuntimeFunctions {
+pub fn add_runtime(
+    module: &mut WasmModule,
+    heap_start: u32,
+    class_name_table_addr: u32,
+    string_vtable_addr: u32,
+) -> RuntimeFunctions {
     // Add heap pointer global (starts after static data)
     module.add_global(ValType::I32, true, heap_start as i32);
-    
+
     // Add class name table address global
     module.add_global(ValType::I32, false, class_name_table_addr as i32);
 
@@ -118,25 +123,25 @@ fn add_alloc(module: &mut WasmModule) -> u32 {
     let func_idx = module.add_function(type_idx);
 
     let mut func = Function::new([(1, ValType::I32)]); // local for return value
-    
+
     // Get current heap pointer and save it
     func.instruction(&Instruction::GlobalGet(HEAP_PTR_GLOBAL));
     func.instruction(&Instruction::LocalSet(1)); // Save to local 1
-    
+
     // Calculate aligned size: (size + 3) & ~3
     func.instruction(&Instruction::LocalGet(0)); // size
     func.instruction(&Instruction::I32Const(3));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::I32Const(-4)); // ~3 = -4 in two's complement
     func.instruction(&Instruction::I32And);
-    
+
     // Add to current heap pointer to get new heap pointer
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32Add);
-    
+
     // Store as new heap pointer
     func.instruction(&Instruction::GlobalSet(HEAP_PTR_GLOBAL));
-    
+
     // Return original pointer
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::End);
@@ -175,10 +180,10 @@ fn add_object_type_name(module: &mut WasmModule) -> u32 {
 
     // Local 0: self (object pointer)
     let mut func = Function::new([]);
-    
+
     // Get class name table base address
     func.instruction(&Instruction::GlobalGet(CLASS_NAME_TABLE_GLOBAL));
-    
+
     // Load class_tag from object at offset 0
     func.instruction(&Instruction::LocalGet(0)); // self
     func.instruction(&Instruction::I32Load(MemArg {
@@ -186,21 +191,21 @@ fn add_object_type_name(module: &mut WasmModule) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Calculate offset: class_tag * 4 (each entry is a 4-byte pointer)
     func.instruction(&Instruction::I32Const(4));
     func.instruction(&Instruction::I32Mul);
-    
+
     // Add to base address
     func.instruction(&Instruction::I32Add);
-    
+
     // Load the String pointer from the table
     func.instruction(&Instruction::I32Load(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
-    
+
     func.instruction(&Instruction::End);
 
     module.add_code(func);
@@ -220,7 +225,7 @@ fn add_object_copy(module: &mut WasmModule, alloc_func: u32) -> u32 {
         (1, ValType::I32), // new_ptr
         (1, ValType::I32), // loop counter
     ]);
-    
+
     // Load size from object header (offset 4)
     func.instruction(&Instruction::LocalGet(0)); // object ptr
     func.instruction(&Instruction::I32Load(MemArg {
@@ -229,32 +234,32 @@ fn add_object_copy(module: &mut WasmModule, alloc_func: u32) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(1)); // size
-    
+
     // Allocate new object
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::Call(alloc_func));
     func.instruction(&Instruction::LocalSet(2)); // new_ptr
-    
+
     // Copy bytes: memcpy loop
     // for (i = 0; i < size; i += 4) { new_ptr[i] = old_ptr[i]; }
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(3)); // i = 0
-    
+
     // Loop
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    
+
     // Check if i >= size
     func.instruction(&Instruction::LocalGet(3));
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32GeU);
     func.instruction(&Instruction::BrIf(1)); // break if done
-    
+
     // Copy word: new_ptr[i] = old_ptr[i]
     func.instruction(&Instruction::LocalGet(2)); // new_ptr
     func.instruction(&Instruction::LocalGet(3)); // i
     func.instruction(&Instruction::I32Add);
-    
+
     func.instruction(&Instruction::LocalGet(0)); // old_ptr
     func.instruction(&Instruction::LocalGet(3)); // i
     func.instruction(&Instruction::I32Add);
@@ -263,23 +268,23 @@ fn add_object_copy(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     func.instruction(&Instruction::I32Store(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
-    
+
     // i += 4
     func.instruction(&Instruction::LocalGet(3));
     func.instruction(&Instruction::I32Const(4));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::LocalSet(3));
-    
+
     func.instruction(&Instruction::Br(0)); // continue loop
     func.instruction(&Instruction::End); // end loop
     func.instruction(&Instruction::End); // end block
-    
+
     // Return new object pointer
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::End);
@@ -300,12 +305,12 @@ fn add_io_out_string(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
     let func_idx = module.add_function(type_idx);
 
     let mut func = Function::new([(1, ValType::I32)]); // local for iovec ptr
-    
+
     // String pointer in local 1 (param)
     // Allocate iovec at a fixed location (offset 0x1000)
     // iovec[0].buf_ptr = string_ptr + 16 (skip header)
     func.instruction(&Instruction::I32Const(0x1000));
-    func.instruction(&Instruction::LocalGet(1));  // string ptr
+    func.instruction(&Instruction::LocalGet(1)); // string ptr
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
@@ -313,7 +318,7 @@ fn add_io_out_string(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // iovec[0].buf_len = string length (at offset 12 of string object)
     func.instruction(&Instruction::I32Const(0x1004));
     func.instruction(&Instruction::LocalGet(1));
@@ -329,15 +334,15 @@ fn add_io_out_string(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Call fd_write(1, 0x1000, 1, 0x1008)
-    func.instruction(&Instruction::I32Const(1));      // stdout fd
+    func.instruction(&Instruction::I32Const(1)); // stdout fd
     func.instruction(&Instruction::I32Const(0x1000)); // iovec ptr
-    func.instruction(&Instruction::I32Const(1));      // iovs_len
+    func.instruction(&Instruction::I32Const(1)); // iovs_len
     func.instruction(&Instruction::I32Const(0x1008)); // nwritten ptr
     func.instruction(&Instruction::Call(wasi_fd_write));
-    func.instruction(&Instruction::Drop);             // drop errno
-    
+    func.instruction(&Instruction::Drop); // drop errno
+
     // Return self
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::End);
@@ -351,7 +356,7 @@ fn add_io_out_string(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
 /// Converts an integer to string and writes to stdout.
 fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
     use wasm_encoder::BlockType;
-    
+
     // (self: i32, i: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
@@ -360,23 +365,23 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
     // Locals: value (local 2), is_negative (local 3), idx (local 4), digit (local 5)
     let mut func = Function::new([
         (1, ValType::I32), // value
-        (1, ValType::I32), // is_negative  
+        (1, ValType::I32), // is_negative
         (1, ValType::I32), // idx (write position in buffer)
         (1, ValType::I32), // digit
     ]);
-    
+
     let buffer = 0x1200i32;
-    
+
     // value = param 1
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::LocalSet(2));
-    
+
     // Check if negative
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::I32LtS);
     func.instruction(&Instruction::LocalSet(3)); // is_negative
-    
+
     // If negative, negate value
     func.instruction(&Instruction::LocalGet(3));
     func.instruction(&Instruction::If(BlockType::Empty));
@@ -387,7 +392,7 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         func.instruction(&Instruction::LocalSet(2));
     }
     func.instruction(&Instruction::End);
-    
+
     // Handle zero case specially
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::I32Const(0));
@@ -410,7 +415,7 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         // Start at end of buffer and write digits backwards
         func.instruction(&Instruction::I32Const(0));
         func.instruction(&Instruction::LocalSet(4)); // idx = 0
-        
+
         // Loop: while value > 0, write digit
         func.instruction(&Instruction::Block(BlockType::Empty));
         func.instruction(&Instruction::Loop(BlockType::Empty));
@@ -419,13 +424,13 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
             func.instruction(&Instruction::LocalGet(2));
             func.instruction(&Instruction::I32Eqz);
             func.instruction(&Instruction::BrIf(1));
-            
+
             // digit = value % 10
             func.instruction(&Instruction::LocalGet(2));
             func.instruction(&Instruction::I32Const(10));
             func.instruction(&Instruction::I32RemU);
             func.instruction(&Instruction::LocalSet(5));
-            
+
             // buffer[10 - idx] = '0' + digit (write backwards from position 10)
             func.instruction(&Instruction::I32Const(buffer + 10));
             func.instruction(&Instruction::LocalGet(4));
@@ -438,24 +443,24 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
                 align: 0,
                 memory_index: 0,
             }));
-            
+
             // idx++
             func.instruction(&Instruction::LocalGet(4));
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::I32Add);
             func.instruction(&Instruction::LocalSet(4));
-            
+
             // value = value / 10
             func.instruction(&Instruction::LocalGet(2));
             func.instruction(&Instruction::I32Const(10));
             func.instruction(&Instruction::I32DivU);
             func.instruction(&Instruction::LocalSet(2));
-            
+
             func.instruction(&Instruction::Br(0));
         }
         func.instruction(&Instruction::End); // loop
         func.instruction(&Instruction::End); // block
-        
+
         // If negative, prepend '-'
         func.instruction(&Instruction::LocalGet(3));
         func.instruction(&Instruction::If(BlockType::Empty));
@@ -464,7 +469,7 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::I32Add);
             func.instruction(&Instruction::LocalSet(4));
-            
+
             func.instruction(&Instruction::I32Const(buffer + 10));
             func.instruction(&Instruction::LocalGet(4));
             func.instruction(&Instruction::I32Sub);
@@ -478,7 +483,7 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         func.instruction(&Instruction::End);
     }
     func.instruction(&Instruction::End);
-    
+
     // iovec.buf_ptr: for zero case it's buffer, otherwise it's (buffer + 11 - idx)
     func.instruction(&Instruction::I32Const(0x1000)); // iovec location
     func.instruction(&Instruction::I32Const(buffer + 11));
@@ -489,7 +494,7 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // iovec.buf_len = idx
     func.instruction(&Instruction::I32Const(0x1004));
     func.instruction(&Instruction::LocalGet(4));
@@ -498,15 +503,15 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Call fd_write(1, 0x1000, 1, 0x1008)
-    func.instruction(&Instruction::I32Const(1));      // stdout fd
+    func.instruction(&Instruction::I32Const(1)); // stdout fd
     func.instruction(&Instruction::I32Const(0x1000)); // iovec ptr
-    func.instruction(&Instruction::I32Const(1));      // iovs_len
+    func.instruction(&Instruction::I32Const(1)); // iovs_len
     func.instruction(&Instruction::I32Const(0x1008)); // nwritten ptr
     func.instruction(&Instruction::Call(wasi_fd_write));
-    func.instruction(&Instruction::Drop);             // drop errno
-    
+    func.instruction(&Instruction::Drop); // drop errno
+
     // Return self
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::End);
@@ -519,7 +524,12 @@ fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
 ///
 /// Reads a line from stdin using WASI fd_read (one byte at a time).
 /// Returns a proper String object.
-fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32, string_vtable_addr: u32) -> u32 {
+fn add_io_in_string(
+    module: &mut WasmModule,
+    wasi_fd_read: u32,
+    alloc_func: u32,
+    string_vtable_addr: u32,
+) -> u32 {
     // (self: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
@@ -532,12 +542,12 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         (1, ValType::I32), // byte (local 4)
         (1, ValType::I32), // nread (local 5)
     ]);
-    
+
     // Read byte-by-byte into buffer at 0x3000 until newline or EOF
     // actual_len = 0
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(1));
-    
+
     // Main read loop
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
@@ -553,7 +563,7 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
             align: 2,
             memory_index: 0,
         }));
-        
+
         // iovec[0].buf_len = 1
         func.instruction(&Instruction::I32Const(0x1104));
         func.instruction(&Instruction::I32Const(1));
@@ -562,15 +572,15 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
             align: 2,
             memory_index: 0,
         }));
-        
+
         // Call fd_read(0, 0x1100, 1, 0x1108)
-        func.instruction(&Instruction::I32Const(0));      // stdin fd
+        func.instruction(&Instruction::I32Const(0)); // stdin fd
         func.instruction(&Instruction::I32Const(0x1100)); // iovec ptr
-        func.instruction(&Instruction::I32Const(1));      // iovs_len
+        func.instruction(&Instruction::I32Const(1)); // iovs_len
         func.instruction(&Instruction::I32Const(0x1108)); // nread ptr
         func.instruction(&Instruction::Call(wasi_fd_read));
-        func.instruction(&Instruction::Drop);             // drop errno
-        
+        func.instruction(&Instruction::Drop); // drop errno
+
         // Load nread from 0x1108
         func.instruction(&Instruction::I32Const(0x1108));
         func.instruction(&Instruction::I32Load(MemArg {
@@ -579,12 +589,12 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
             memory_index: 0,
         }));
         func.instruction(&Instruction::LocalSet(5));
-        
+
         // If nread == 0 (EOF), exit loop
         func.instruction(&Instruction::LocalGet(5));
         func.instruction(&Instruction::I32Eqz);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // Load the byte we just read
         func.instruction(&Instruction::I32Const(0x3000));
         func.instruction(&Instruction::LocalGet(1));
@@ -595,42 +605,42 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
             memory_index: 0,
         }));
         func.instruction(&Instruction::LocalSet(4));
-        
+
         // If byte == 10 (newline), exit loop (don't include newline in result)
         func.instruction(&Instruction::LocalGet(4));
         func.instruction(&Instruction::I32Const(10));
         func.instruction(&Instruction::I32Eq);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // If byte == 0 (null), exit loop
         func.instruction(&Instruction::LocalGet(4));
         func.instruction(&Instruction::I32Eqz);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // actual_len++
         func.instruction(&Instruction::LocalGet(1));
         func.instruction(&Instruction::I32Const(1));
         func.instruction(&Instruction::I32Add);
         func.instruction(&Instruction::LocalSet(1));
-        
+
         // Check buffer overflow (max 1024 bytes)
         func.instruction(&Instruction::LocalGet(1));
         func.instruction(&Instruction::I32Const(1024));
         func.instruction(&Instruction::I32GeU);
         func.instruction(&Instruction::BrIf(1));
-        
+
         func.instruction(&Instruction::Br(0));
     }
     func.instruction(&Instruction::End); // end loop
     func.instruction(&Instruction::End); // end block
-    
+
     // Allocate String object: 16 bytes header + actual_len
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::Call(alloc_func));
     func.instruction(&Instruction::LocalSet(2)); // str_ptr
-    
+
     // Store class_tag = 2 (String) at offset 0
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::I32Const(2));
@@ -639,7 +649,7 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store size = 16 + actual_len at offset 4
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::I32Const(16));
@@ -650,7 +660,7 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store vtable_ptr at offset 8
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::I32Const(string_vtable_addr as i32));
@@ -659,7 +669,7 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store length at offset 12
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::LocalGet(1));
@@ -668,12 +678,12 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Copy data from buffer (0x3000) to str_ptr+16
     // loop_idx = 0
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(3));
-    
+
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     {
@@ -682,14 +692,14 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
         func.instruction(&Instruction::LocalGet(1));
         func.instruction(&Instruction::I32GeU);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // dest: str_ptr + 16 + loop_idx
         func.instruction(&Instruction::LocalGet(2));
         func.instruction(&Instruction::I32Const(16));
         func.instruction(&Instruction::I32Add);
         func.instruction(&Instruction::LocalGet(3));
         func.instruction(&Instruction::I32Add);
-        
+
         // src: 0x3000 + loop_idx
         func.instruction(&Instruction::I32Const(0x3000));
         func.instruction(&Instruction::LocalGet(3));
@@ -699,25 +709,25 @@ fn add_io_in_string(module: &mut WasmModule, wasi_fd_read: u32, alloc_func: u32,
             align: 0,
             memory_index: 0,
         }));
-        
+
         // store byte
         func.instruction(&Instruction::I32Store8(MemArg {
             offset: 0,
             align: 0,
             memory_index: 0,
         }));
-        
+
         // loop_idx++
         func.instruction(&Instruction::LocalGet(3));
         func.instruction(&Instruction::I32Const(1));
         func.instruction(&Instruction::I32Add);
         func.instruction(&Instruction::LocalSet(3));
-        
+
         func.instruction(&Instruction::Br(0));
     }
     func.instruction(&Instruction::End); // end loop
     func.instruction(&Instruction::End); // end block
-    
+
     // Return str_ptr
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::End);
@@ -749,19 +759,19 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
         (1, ValType::I32), // is_negative
         (1, ValType::I32), // started
     ]);
-    
+
     // Initialize result = 0
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(1));
-    
+
     // Initialize is_negative = 0
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(4));
-    
+
     // Initialize started = 0
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(5));
-    
+
     // Set up iovec at scratch buffer 0x3100:
     // iovec.buf = 0x3100 (read single byte at a time)
     // iovec.len = 1
@@ -779,7 +789,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Main read loop
     func.instruction(&Instruction::Block(BlockType::Empty));
     func.instruction(&Instruction::Loop(BlockType::Empty));
@@ -791,7 +801,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
         func.instruction(&Instruction::I32Const(0x310C)); // nread ptr
         func.instruction(&Instruction::Call(wasi_fd_read));
         func.instruction(&Instruction::Drop);
-        
+
         // Load nread
         func.instruction(&Instruction::I32Const(0x310C));
         func.instruction(&Instruction::I32Load(MemArg {
@@ -800,12 +810,12 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             memory_index: 0,
         }));
         func.instruction(&Instruction::LocalSet(3));
-        
+
         // If nread == 0 (EOF), exit loop
         func.instruction(&Instruction::LocalGet(3));
         func.instruction(&Instruction::I32Eqz);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // Load the character we just read
         func.instruction(&Instruction::I32Const(0x3108));
         func.instruction(&Instruction::I32Load8U(MemArg {
@@ -814,19 +824,19 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             memory_index: 0,
         }));
         func.instruction(&Instruction::LocalSet(2));
-        
+
         // If char == 10 (newline), exit loop
         func.instruction(&Instruction::LocalGet(2));
         func.instruction(&Instruction::I32Const(10));
         func.instruction(&Instruction::I32Eq);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // If char == 13 (carriage return), exit loop
         func.instruction(&Instruction::LocalGet(2));
         func.instruction(&Instruction::I32Const(13));
         func.instruction(&Instruction::I32Eq);
         func.instruction(&Instruction::BrIf(1));
-        
+
         // Check for '-' (minus sign) at start
         func.instruction(&Instruction::LocalGet(5)); // started
         func.instruction(&Instruction::I32Eqz);
@@ -846,7 +856,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             func.instruction(&Instruction::End);
         }
         func.instruction(&Instruction::End);
-        
+
         // Skip leading spaces and tabs
         func.instruction(&Instruction::LocalGet(5)); // started
         func.instruction(&Instruction::I32Eqz);
@@ -866,7 +876,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             func.instruction(&Instruction::End);
         }
         func.instruction(&Instruction::End);
-        
+
         // Check if char is a digit ('0' to '9')
         func.instruction(&Instruction::LocalGet(2));
         func.instruction(&Instruction::I32Const(48)); // '0'
@@ -880,7 +890,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             // Mark that we've started reading digits
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::LocalSet(5));
-            
+
             // result = result * 10 + (char - '0')
             func.instruction(&Instruction::LocalGet(1));
             func.instruction(&Instruction::I32Const(10));
@@ -890,7 +900,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
             func.instruction(&Instruction::I32Sub);
             func.instruction(&Instruction::I32Add);
             func.instruction(&Instruction::LocalSet(1));
-            
+
             // Continue loop
             func.instruction(&Instruction::Br(1));
         }
@@ -911,7 +921,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
     }
     func.instruction(&Instruction::End); // end loop
     func.instruction(&Instruction::End); // end block
-    
+
     // Apply negation if needed
     func.instruction(&Instruction::LocalGet(4)); // is_negative
     func.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
@@ -925,7 +935,7 @@ fn add_io_in_int(module: &mut WasmModule, wasi_fd_read: u32) -> u32 {
         func.instruction(&Instruction::LocalGet(1));
     }
     func.instruction(&Instruction::End);
-    
+
     func.instruction(&Instruction::End);
 
     module.add_code(func);
@@ -973,7 +983,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         (1, ValType::I32), // new_ptr
         (1, ValType::I32), // loop counter
     ]);
-    
+
     // Get length of first string (offset 12)
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::I32Load(MemArg {
@@ -982,7 +992,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(2)); // len1
-    
+
     // Get length of second string
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32Load(MemArg {
@@ -991,20 +1001,20 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(3)); // len2
-    
+
     // Calculate new length
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::LocalGet(3));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::LocalSet(4)); // new_len
-    
+
     // Allocate new string: header (16 bytes) + data
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::LocalGet(4));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::Call(alloc_func));
     func.instruction(&Instruction::LocalSet(5)); // new_ptr
-    
+
     // Copy class_tag from first string
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(0));
@@ -1018,7 +1028,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store size (header + data)
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::I32Const(16));
@@ -1029,7 +1039,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Copy vtable_ptr from first string
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(0));
@@ -1043,7 +1053,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store new length
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(4));
@@ -1052,25 +1062,25 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Copy first string data (byte by byte)
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(6)); // i = 0
-    
+
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::LocalGet(2)); // len1
     func.instruction(&Instruction::I32GeU);
     func.instruction(&Instruction::BrIf(1));
-    
+
     // new_ptr[16 + i] = str1[16 + i]
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Add);
-    
+
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
@@ -1086,7 +1096,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 0,
         memory_index: 0,
     }));
-    
+
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Const(1));
     func.instruction(&Instruction::I32Add);
@@ -1094,18 +1104,18 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
     func.instruction(&Instruction::Br(0));
     func.instruction(&Instruction::End);
     func.instruction(&Instruction::End);
-    
+
     // Copy second string data
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(6)); // i = 0
-    
+
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::LocalGet(3)); // len2
     func.instruction(&Instruction::I32GeU);
     func.instruction(&Instruction::BrIf(1));
-    
+
     // new_ptr[16 + len1 + i] = str2[16 + i]
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::I32Const(16));
@@ -1114,7 +1124,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Add);
-    
+
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
@@ -1130,7 +1140,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 0,
         memory_index: 0,
     }));
-    
+
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Const(1));
     func.instruction(&Instruction::I32Add);
@@ -1138,7 +1148,7 @@ fn add_string_concat(module: &mut WasmModule, alloc_func: u32) -> u32 {
     func.instruction(&Instruction::Br(0));
     func.instruction(&Instruction::End);
     func.instruction(&Instruction::End);
-    
+
     // Return new string
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::End);
@@ -1165,7 +1175,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         (1, ValType::I32), // new_ptr
         (1, ValType::I32), // loop counter
     ]);
-    
+
     // Get string length
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::I32Load(MemArg {
@@ -1174,19 +1184,19 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(3)); // str_len
-    
+
     // Calculate actual substring length: min(l, str_len - i)
     // For MVP: assume valid bounds, just use l
     func.instruction(&Instruction::LocalGet(2)); // l
     func.instruction(&Instruction::LocalSet(4)); // actual_len = l
-    
+
     // Allocate new string
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::LocalGet(4));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::Call(alloc_func));
     func.instruction(&Instruction::LocalSet(5)); // new_ptr
-    
+
     // Copy class_tag
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(0));
@@ -1200,7 +1210,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store size
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::I32Const(16));
@@ -1211,7 +1221,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Copy vtable_ptr
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(0));
@@ -1225,7 +1235,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Store length
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::LocalGet(4));
@@ -1234,25 +1244,25 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 2,
         memory_index: 0,
     }));
-    
+
     // Copy substring data
     func.instruction(&Instruction::I32Const(0));
     func.instruction(&Instruction::LocalSet(6)); // loop counter = 0
-    
+
     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::LocalGet(4)); // actual_len
     func.instruction(&Instruction::I32GeU);
     func.instruction(&Instruction::BrIf(1));
-    
+
     // new_ptr[16 + loop_counter] = old_ptr[16 + i + loop_counter]
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Add);
-    
+
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::I32Const(16));
     func.instruction(&Instruction::I32Add);
@@ -1270,7 +1280,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
         align: 0,
         memory_index: 0,
     }));
-    
+
     func.instruction(&Instruction::LocalGet(6));
     func.instruction(&Instruction::I32Const(1));
     func.instruction(&Instruction::I32Add);
@@ -1278,7 +1288,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
     func.instruction(&Instruction::Br(0));
     func.instruction(&Instruction::End);
     func.instruction(&Instruction::End);
-    
+
     // Return new string
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::End);
@@ -1293,7 +1303,7 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
 /// Returns 1 (true) if equal, 0 (false) otherwise.
 fn add_string_equals(module: &mut WasmModule) -> u32 {
     use wasm_encoder::BlockType;
-    
+
     // (s1: i32, s2: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
@@ -1305,7 +1315,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
         (1, ValType::I32), // idx (local 4)
         (1, ValType::I32), // result (local 5)
     ]);
-    
+
     // Get length of first string (offset 12)
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::I32Load(MemArg {
@@ -1314,7 +1324,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(2)); // len1
-    
+
     // Get length of second string
     func.instruction(&Instruction::LocalGet(1));
     func.instruction(&Instruction::I32Load(MemArg {
@@ -1323,7 +1333,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
         memory_index: 0,
     }));
     func.instruction(&Instruction::LocalSet(3)); // len2
-    
+
     // If lengths differ, return false
     func.instruction(&Instruction::LocalGet(2));
     func.instruction(&Instruction::LocalGet(3));
@@ -1338,11 +1348,11 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
         // Default: assume equal
         func.instruction(&Instruction::I32Const(1));
         func.instruction(&Instruction::LocalSet(5)); // result = true
-        
+
         // Compare character by character
         func.instruction(&Instruction::I32Const(0));
         func.instruction(&Instruction::LocalSet(4)); // idx = 0
-        
+
         func.instruction(&Instruction::Block(BlockType::Empty)); // outer block for early exit
         func.instruction(&Instruction::Loop(BlockType::Empty));
         {
@@ -1351,7 +1361,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
             func.instruction(&Instruction::LocalGet(2));
             func.instruction(&Instruction::I32GeU);
             func.instruction(&Instruction::BrIf(1)); // exit outer block
-            
+
             // Compare s1[idx] with s2[idx]
             func.instruction(&Instruction::LocalGet(0));
             func.instruction(&Instruction::I32Const(16)); // skip header
@@ -1363,7 +1373,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
                 align: 0,
                 memory_index: 0,
             }));
-            
+
             func.instruction(&Instruction::LocalGet(1));
             func.instruction(&Instruction::I32Const(16));
             func.instruction(&Instruction::I32Add);
@@ -1374,7 +1384,7 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
                 align: 0,
                 memory_index: 0,
             }));
-            
+
             func.instruction(&Instruction::I32Ne);
             func.instruction(&Instruction::If(BlockType::Empty));
             {
@@ -1384,20 +1394,20 @@ fn add_string_equals(module: &mut WasmModule) -> u32 {
                 func.instruction(&Instruction::Br(2)); // exit outer block
             }
             func.instruction(&Instruction::End);
-            
+
             // idx++
             func.instruction(&Instruction::LocalGet(4));
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::I32Add);
             func.instruction(&Instruction::LocalSet(4));
-            
+
             func.instruction(&Instruction::Br(0)); // continue loop
         }
         func.instruction(&Instruction::End); // loop
         func.instruction(&Instruction::End); // block
     }
     func.instruction(&Instruction::End); // if/else
-    
+
     // Return result
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::End);

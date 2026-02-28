@@ -10,7 +10,7 @@ pub enum TypeId {
     Bool,
     Class(String),
     SelfType(String), // SELF_TYPE with the current class context
-    NoType, // For error recovery
+    NoType,           // For error recovery
 }
 
 impl TypeId {
@@ -139,10 +139,7 @@ pub enum HirExpr {
     },
 
     /// Block: { expr1; expr2; ...; exprN }
-    Block {
-        exprs: Vec<HirExpr>,
-        typ: TypeId,
-    },
+    Block { exprs: Vec<HirExpr>, typ: TypeId },
 
     /// Let binding: let name: type <- init in body
     Let {
@@ -161,22 +158,13 @@ pub enum HirExpr {
     },
 
     /// Object creation: new Type
-    New {
-        type_name: String,
-        typ: TypeId,
-    },
+    New { type_name: String, typ: TypeId },
 
     /// Unary negation: ~expr
-    IsVoid {
-        expr: Box<HirExpr>,
-        typ: TypeId,
-    },
+    IsVoid { expr: Box<HirExpr>, typ: TypeId },
 
     /// Arithmetic negation: -expr
-    Negate {
-        expr: Box<HirExpr>,
-        typ: TypeId,
-    },
+    Negate { expr: Box<HirExpr>, typ: TypeId },
 
     /// Arithmetic: expr1 + expr2
     Add {
@@ -228,34 +216,19 @@ pub enum HirExpr {
     },
 
     /// Boolean negation: not expr
-    Not {
-        expr: Box<HirExpr>,
-        typ: TypeId,
-    },
+    Not { expr: Box<HirExpr>, typ: TypeId },
 
     /// Integer literal
-    IntLiteral {
-        value: i32,
-        typ: TypeId,
-    },
+    IntLiteral { value: i32, typ: TypeId },
 
     /// String literal
-    StringLiteral {
-        value: String,
-        typ: TypeId,
-    },
+    StringLiteral { value: String, typ: TypeId },
 
     /// Boolean literal
-    BoolLiteral {
-        value: bool,
-        typ: TypeId,
-    },
+    BoolLiteral { value: bool, typ: TypeId },
 
     /// Variable reference
-    Object {
-        name: String,
-        typ: TypeId,
-    },
+    Object { name: String, typ: TypeId },
 }
 
 impl HirExpr {

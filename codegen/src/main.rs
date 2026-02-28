@@ -9,7 +9,7 @@ use parser::Program;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() < 2 {
         print_usage(&args[0]);
         std::process::exit(1);
@@ -57,15 +57,22 @@ fn main() {
     }
 
     // Default output: based on first input file
-    let output_path = output_path.unwrap_or_else(|| {
-        input_files[0].replace(".cl", ".wasm")
-    });
+    let output_path = output_path.unwrap_or_else(|| input_files[0].replace(".cl", ".wasm"));
 
-    let output_type = if emit_component { "component" } else { "module" };
-    println!("Compiling {} file(s) to {} ({})", input_files.len(), output_path, output_type);
+    let output_type = if emit_component {
+        "component"
+    } else {
+        "module"
+    };
+    println!(
+        "Compiling {} file(s) to {} ({})",
+        input_files.len(),
+        output_path,
+        output_type
+    );
 
     // Full compilation pipeline: Parser → Semant → AST-to-HIR → Codegen
-    
+
     // 1. Parsing (includes lexing) - parse all files and merge classes
     let mut all_classes = Vec::new();
     for input_path in &input_files {
@@ -93,7 +100,9 @@ fn main() {
     }
 
     // Merge all classes into a single program
-    let ast = Program { classes: all_classes };
+    let ast = Program {
+        classes: all_classes,
+    };
     println!("  Total: {} classes", ast.classes.len());
 
     // 2. Semantic analysis
@@ -122,7 +131,10 @@ fn main() {
             let final_bytes = if emit_component {
                 match encode_component(&wasm_bytes) {
                     Ok(component_bytes) => {
-                        println!("  Wrapped as WASM component ({} bytes)", component_bytes.len());
+                        println!(
+                            "  Wrapped as WASM component ({} bytes)",
+                            component_bytes.len()
+                        );
                         component_bytes
                     }
                     Err(e) => {
@@ -150,24 +162,30 @@ fn main() {
 
 /// Encode a core WASM module as a WASM component
 fn encode_component(core_wasm: &[u8]) -> Result<Vec<u8>, String> {
-    use wit_component::ComponentEncoder;
     use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_COMMAND_ADAPTER;
-    
+    use wit_component::ComponentEncoder;
+
     // Create a component that wraps the core module with WASI adapter
     let encoded = ComponentEncoder::default()
         .module(core_wasm)
         .map_err(|e| format!("Failed to set module: {}", e))?
-        .adapter("wasi_snapshot_preview1", WASI_SNAPSHOT_PREVIEW1_COMMAND_ADAPTER)
+        .adapter(
+            "wasi_snapshot_preview1",
+            WASI_SNAPSHOT_PREVIEW1_COMMAND_ADAPTER,
+        )
         .map_err(|e| format!("Failed to add WASI adapter: {}", e))?
         .validate(true)
         .encode()
         .map_err(|e| format!("Failed to encode component: {}", e))?;
-    
+
     Ok(encoded)
 }
 
 fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} <input1.cl> [input2.cl ...] [-o <output.wasm>] [--component]", program_name);
+    eprintln!(
+        "Usage: {} <input1.cl> [input2.cl ...] [-o <output.wasm>] [--component]",
+        program_name
+    );
     eprintln!();
     eprintln!("Compile one or more COOL files to WebAssembly.");
     eprintln!("Classes from all input files are merged into a single program.");

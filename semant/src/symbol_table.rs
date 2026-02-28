@@ -38,7 +38,10 @@ impl ScopeStack {
     pub fn add_variable(&mut self, name: String, typ: String) -> Result<(), String> {
         if let Some(current_scope) = self.scopes.last_mut() {
             if current_scope.contains_key(&name) {
-                return Err(format!("Variable '{}' already defined in current scope", name));
+                return Err(format!(
+                    "Variable '{}' already defined in current scope",
+                    name
+                ));
             }
             current_scope.insert(name, typ);
             Ok(())
@@ -67,24 +70,30 @@ mod tests {
     #[test]
     fn test_basic_variable_lookup() {
         let mut scope = ScopeStack::new();
-        scope.add_variable("x".to_string(), "Int".to_string()).unwrap();
+        scope
+            .add_variable("x".to_string(), "Int".to_string())
+            .unwrap();
         assert_eq!(scope.lookup_variable("x"), Some(&"Int".to_string()));
     }
 
     #[test]
     fn test_nested_scopes() {
         let mut scope = ScopeStack::new();
-        scope.add_variable("x".to_string(), "Int".to_string()).unwrap();
-        
+        scope
+            .add_variable("x".to_string(), "Int".to_string())
+            .unwrap();
+
         scope.push_scope();
-        scope.add_variable("y".to_string(), "String".to_string()).unwrap();
-        
+        scope
+            .add_variable("y".to_string(), "String".to_string())
+            .unwrap();
+
         // Both variables visible in inner scope
         assert_eq!(scope.lookup_variable("x"), Some(&"Int".to_string()));
         assert_eq!(scope.lookup_variable("y"), Some(&"String".to_string()));
-        
+
         scope.pop_scope();
-        
+
         // Only x visible after popping
         assert_eq!(scope.lookup_variable("x"), Some(&"Int".to_string()));
         assert_eq!(scope.lookup_variable("y"), None);
@@ -93,16 +102,20 @@ mod tests {
     #[test]
     fn test_shadowing() {
         let mut scope = ScopeStack::new();
-        scope.add_variable("x".to_string(), "Int".to_string()).unwrap();
-        
+        scope
+            .add_variable("x".to_string(), "Int".to_string())
+            .unwrap();
+
         scope.push_scope();
-        scope.add_variable("x".to_string(), "String".to_string()).unwrap();
-        
+        scope
+            .add_variable("x".to_string(), "String".to_string())
+            .unwrap();
+
         // Inner x shadows outer x
         assert_eq!(scope.lookup_variable("x"), Some(&"String".to_string()));
-        
+
         scope.pop_scope();
-        
+
         // Back to original x
         assert_eq!(scope.lookup_variable("x"), Some(&"Int".to_string()));
     }
@@ -110,8 +123,10 @@ mod tests {
     #[test]
     fn test_duplicate_in_same_scope() {
         let mut scope = ScopeStack::new();
-        scope.add_variable("x".to_string(), "Int".to_string()).unwrap();
-        
+        scope
+            .add_variable("x".to_string(), "Int".to_string())
+            .unwrap();
+
         let result = scope.add_variable("x".to_string(), "String".to_string());
         assert!(result.is_err());
     }
@@ -120,7 +135,7 @@ mod tests {
     fn test_self_binding() {
         let mut scope = ScopeStack::new();
         scope.add_self("MyClass");
-        
+
         assert_eq!(scope.lookup_variable("self"), Some(&"MyClass".to_string()));
     }
 
@@ -128,7 +143,7 @@ mod tests {
     fn test_cannot_pop_root_scope() {
         let mut scope = ScopeStack::new();
         assert_eq!(scope.depth(), 1);
-        
+
         scope.pop_scope();
         assert_eq!(scope.depth(), 1); // Still 1, cannot pop root
     }

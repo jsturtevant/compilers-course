@@ -82,7 +82,7 @@ impl WasmModule {
         if let Some(&idx) = self.type_cache.get(&key) {
             return idx;
         }
-        
+
         self.types.ty().function(params, results);
         let idx = self.next_type_idx;
         self.next_type_idx += 1;
@@ -150,11 +150,11 @@ impl WasmModule {
     ///
     /// Populates the function table with function references for call_indirect.
     pub fn add_element_section(&mut self, func_indices: &[u32]) {
-        use wasm_encoder::Elements;
         use std::borrow::Cow;
+        use wasm_encoder::Elements;
         self.elements.active(
-            Some(0),  // table index
-            &wasm_encoder::ConstExpr::i32_const(0),  // offset
+            Some(0),                                // table index
+            &wasm_encoder::ConstExpr::i32_const(0), // offset
             Elements::Functions(Cow::Borrowed(func_indices)),
         );
     }
@@ -163,11 +163,8 @@ impl WasmModule {
     ///
     /// Places data at a specific offset (typically for string literals, vtables).
     pub fn add_data(&mut self, offset: u32, data: Vec<u8>) {
-        self.data.active(
-            0,
-            &wasm_encoder::ConstExpr::i32_const(offset as i32),
-            data,
-        );
+        self.data
+            .active(0, &wasm_encoder::ConstExpr::i32_const(offset as i32), data);
     }
 
     /// Add a global variable
@@ -188,7 +185,9 @@ impl WasmModule {
     ///
     /// Specifies which function to execute when the module is instantiated.
     pub fn set_start(&mut self, func_idx: u32) {
-        self.start = Some(StartSection { function_index: func_idx });
+        self.start = Some(StartSection {
+            function_index: func_idx,
+        });
     }
 
     /// Finalize and encode the WASM module
