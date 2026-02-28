@@ -192,3 +192,7 @@ jobs:
     - name: Run WASM execution tests
       run: ./scripts/run-wasmtime-all.sh
       shell: bash
+    
+    - name: Run WASM component tests
+      run: ./scripts/run-component-test.sh
+      shell: bash
