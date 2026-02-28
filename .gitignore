@@ -8,3 +8,5 @@ cool-support/
 # Squad: ignore generated logs
 .squad/orchestration-log/
 .squad/log/
+test.wasm
+*.wasm
