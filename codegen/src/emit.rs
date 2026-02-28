@@ -107,6 +107,7 @@ impl Default for EmitContext {
             string_length: 0,
             string_concat: 0,
             string_substr: 0,
+            string_equals: 0,
             wasi_fd_write: 0,
             wasi_fd_read: 0,
         })
@@ -118,21 +119,41 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     let mut module = WasmModule::new();
 
     // Initialize memory (1 page = 64KB for static data + heap)
-    module.init_memory(16); // 16 pages = 1MB
+    module.init_memory(256); // 256 pages = 16MB
 
     // Export memory for debugging
     module.export_memory("memory");
 
+    // Calculate heap start address (must be after all static data)
+    // Layout: strings at 0x2000, vtables after strings
+    let num_strings = program.string_data.len() as u32;
+    let strings_end = 0x2000u32 + num_strings * 128;
+    let mut vtable_offset = ((strings_end + 255) / 256) * 256;
+    if vtable_offset < 0x4000 {
+        vtable_offset = 0x4000; // Minimum address for vtables
+    }
+    
+    // Calculate vtable size: builtin vtables + user vtables
+    // Object(3) + IO(7) + String(6) + Int(3) + Bool(3) = 22
+    let builtin_vtable_entries = 3 + 7 + 6 + 3 + 3;
+    let user_vtable_entries: usize = program.vtables.iter()
+        .map(|v| v.methods.len())
+        .sum();
+    let vtables_size = ((builtin_vtable_entries + user_vtable_entries) * 4) as u32;
+    
+    // Heap starts after vtables, aligned to 256-byte boundary
+    let heap_start = ((vtable_offset + vtables_size + 255) / 256) * 256;
+
     // Add runtime functions (Object, IO, String)
-    let runtime = add_runtime(&mut module);
+    let runtime = add_runtime(&mut module, heap_start);
     
     let mut ctx = EmitContext::new(runtime);
 
     // Register all program functions first (for call references)
     for (i, func) in program.functions.iter().enumerate() {
         // Runtime functions take first indices, so offset by runtime count
-        // 2 WASI imports + 1 alloc + 3 Object + 4 IO + 3 String = 13 functions
-        let func_idx = (i + 13) as u32;
+        // 2 WASI imports + 1 alloc + 3 Object + 4 IO + 4 String = 14 functions
+        let func_idx = (i + 14) as u32;
         ctx.register_function(func.name.clone(), func_idx);
     }
     
@@ -147,6 +168,7 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     ctx.register_function("String_length".to_string(), runtime.string_length);
     ctx.register_function("String_concat".to_string(), runtime.string_concat);
     ctx.register_function("String_substr".to_string(), runtime.string_substr);
+    ctx.register_function("String_equals".to_string(), runtime.string_equals);
 
     // Add type signatures for call_indirect with different param counts (0-10 params)
     // All COOL methods take i32s and return i32
@@ -699,6 +721,7 @@ mod tests {
             string_length: 10,
             string_concat: 11,
             string_substr: 12,
+            string_equals: 13,
             wasi_fd_write: 0,
             wasi_fd_read: 1,
         };

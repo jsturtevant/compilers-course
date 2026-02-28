@@ -27,6 +27,7 @@ pub struct RuntimeFunctions {
     pub string_length: u32,
     pub string_concat: u32,
     pub string_substr: u32,
+    pub string_equals: u32,
     pub wasi_fd_write: u32,
     pub wasi_fd_read: u32,
 }
@@ -41,9 +42,9 @@ const HEAP_PTR_GLOBAL: u32 = 0;
 /// 2. Adds heap pointer global
 /// 3. Defines runtime functions for allocator, Object, IO, and String
 /// 4. Returns function indices for use in codegen
-pub fn add_runtime(module: &mut WasmModule) -> RuntimeFunctions {
-    // Add heap pointer global (starts at 1KB = 0x400)
-    module.add_global(ValType::I32, true, 1024);
+pub fn add_runtime(module: &mut WasmModule, heap_start: u32) -> RuntimeFunctions {
+    // Add heap pointer global (starts after static data)
+    module.add_global(ValType::I32, true, heap_start as i32);
 
     // WASI imports
     // fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
@@ -80,6 +81,7 @@ pub fn add_runtime(module: &mut WasmModule) -> RuntimeFunctions {
     let string_length = add_string_length(module);
     let string_concat = add_string_concat(module, alloc);
     let string_substr = add_string_substr(module, alloc);
+    let string_equals = add_string_equals(module);
 
     RuntimeFunctions {
         alloc,
@@ -93,6 +95,7 @@ pub fn add_runtime(module: &mut WasmModule) -> RuntimeFunctions {
         string_length,
         string_concat,
         string_substr,
+        string_equals,
         wasi_fd_write,
         wasi_fd_read,
     }
@@ -746,6 +749,125 @@ fn add_string_substr(module: &mut WasmModule, alloc_func: u32) -> u32 {
     func.instruction(&Instruction::End);
     
     // Return new string
+    func.instruction(&Instruction::LocalGet(5));
+    func.instruction(&Instruction::End);
+
+    module.add_code(func);
+    func_idx
+}
+
+/// String_equals(s1: String, s2: String) -> Bool (i32)
+///
+/// Compares two strings by content.
+/// Returns 1 (true) if equal, 0 (false) otherwise.
+fn add_string_equals(module: &mut WasmModule) -> u32 {
+    use wasm_encoder::BlockType;
+    
+    // (s1: i32, s2: i32) -> i32
+    let type_idx = module.add_type(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+    let func_idx = module.add_function(type_idx);
+
+    // Locals: len1, len2, idx, result
+    let mut func = Function::new([
+        (1, ValType::I32), // len1 (local 2)
+        (1, ValType::I32), // len2 (local 3)
+        (1, ValType::I32), // idx (local 4)
+        (1, ValType::I32), // result (local 5)
+    ]);
+    
+    // Get length of first string (offset 12)
+    func.instruction(&Instruction::LocalGet(0));
+    func.instruction(&Instruction::I32Load(MemArg {
+        offset: 12,
+        align: 2,
+        memory_index: 0,
+    }));
+    func.instruction(&Instruction::LocalSet(2)); // len1
+    
+    // Get length of second string
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::I32Load(MemArg {
+        offset: 12,
+        align: 2,
+        memory_index: 0,
+    }));
+    func.instruction(&Instruction::LocalSet(3)); // len2
+    
+    // If lengths differ, return false
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::LocalGet(3));
+    func.instruction(&Instruction::I32Ne);
+    func.instruction(&Instruction::If(BlockType::Empty));
+    {
+        func.instruction(&Instruction::I32Const(0)); // false
+        func.instruction(&Instruction::LocalSet(5)); // result = false
+    }
+    func.instruction(&Instruction::Else);
+    {
+        // Default: assume equal
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::LocalSet(5)); // result = true
+        
+        // Compare character by character
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalSet(4)); // idx = 0
+        
+        func.instruction(&Instruction::Block(BlockType::Empty)); // outer block for early exit
+        func.instruction(&Instruction::Loop(BlockType::Empty));
+        {
+            // if idx >= len1 then exit loop (done)
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32GeU);
+            func.instruction(&Instruction::BrIf(1)); // exit outer block
+            
+            // Compare s1[idx] with s2[idx]
+            func.instruction(&Instruction::LocalGet(0));
+            func.instruction(&Instruction::I32Const(16)); // skip header
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            
+            func.instruction(&Instruction::LocalGet(1));
+            func.instruction(&Instruction::I32Const(16));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            
+            func.instruction(&Instruction::I32Ne);
+            func.instruction(&Instruction::If(BlockType::Empty));
+            {
+                // Characters differ, set result to false and exit
+                func.instruction(&Instruction::I32Const(0));
+                func.instruction(&Instruction::LocalSet(5));
+                func.instruction(&Instruction::Br(2)); // exit outer block
+            }
+            func.instruction(&Instruction::End);
+            
+            // idx++
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalSet(4));
+            
+            func.instruction(&Instruction::Br(0)); // continue loop
+        }
+        func.instruction(&Instruction::End); // loop
+        func.instruction(&Instruction::End); // block
+    }
+    func.instruction(&Instruction::End); // if/else
+    
+    // Return result
     func.instruction(&Instruction::LocalGet(5));
     func.instruction(&Instruction::End);
 

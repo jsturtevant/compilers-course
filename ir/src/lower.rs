@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub struct ClassMetadata {
     pub class_tag: usize,
     pub object_size: u32,  // Total size in bytes (header + attributes)
-    pub attributes: Vec<(String, TypeId, u32)>,  // (name, type, offset)
+    pub attributes: Vec<(String, TypeId, u32, Option<HirExpr>)>,  // (name, type, offset, initializer)
 }
 
 /// Lowering context for HIR -> LIR transformation
@@ -109,7 +109,7 @@ impl LoweringContext {
             let mut offset = 12u32; // Object header is 12 bytes
             let mut attrs = Vec::new();
             for attr in &class.attributes {
-                attrs.push((attr.name.clone(), attr.typ.clone(), offset));
+                attrs.push((attr.name.clone(), attr.typ.clone(), offset, attr.init.clone()));
                 offset += 4; // Each attribute is 4 bytes
             }
             self.class_metadata.insert(class.name.clone(), ClassMetadata {
@@ -179,8 +179,8 @@ impl LoweringContext {
                 class_tag: 2,
                 object_size: 20, // 12 header + 4 length + 4 data ptr
                 attributes: vec![
-                    ("length".to_string(), TypeId::Int, 12),
-                    ("data".to_string(), TypeId::Int, 16),
+                    ("length".to_string(), TypeId::Int, 12, None),
+                    ("data".to_string(), TypeId::Int, 16, None),
                 ],
             });
         }
@@ -196,7 +196,7 @@ impl LoweringContext {
             self.class_metadata.insert("Int".to_string(), ClassMetadata {
                 class_tag: 3,
                 object_size: 16, // 12 header + 4 value
-                attributes: vec![("value".to_string(), TypeId::Int, 12)],
+                attributes: vec![("value".to_string(), TypeId::Int, 12, None)],
             });
         }
         if !self.class_tags.contains_key("Bool") {
@@ -211,7 +211,7 @@ impl LoweringContext {
             self.class_metadata.insert("Bool".to_string(), ClassMetadata {
                 class_tag: 4,
                 object_size: 16, // 12 header + 4 value
-                attributes: vec![("value".to_string(), TypeId::Bool, 12)],
+                attributes: vec![("value".to_string(), TypeId::Bool, 12, None)],
             });
         }
 
@@ -510,7 +510,14 @@ impl LoweringContext {
                 let mut instrs = Vec::new();
                 instrs.extend(self.lower_expr(left));
                 instrs.extend(self.lower_expr(right));
-                instrs.push(LirInstr::I32Eq);
+                
+                // For String comparison, use content comparison
+                if *left.get_type() == TypeId::String {
+                    // Call String_equals runtime function
+                    instrs.push(LirInstr::Call("String_equals".to_string()));
+                } else {
+                    instrs.push(LirInstr::I32Eq);
+                }
                 instrs
             }
 
@@ -627,21 +634,47 @@ impl LoweringContext {
                     instrs.push(LirInstr::GetVTableAddr(type_name.clone()));
                     instrs.push(LirInstr::I32Store { offset: 8, align: 4 });
                     
-                    // Initialize attributes to default values based on type
-                    for (attr_name, attr_type, attr_offset) in &metadata.attributes {
+                    // Save current "self" binding and set up new object as "self"
+                    // This allows initializers to reference "self"
+                    let old_self = self.locals.get("self").copied();
+                    self.locals.insert("self".to_string(), obj_local);
+                    
+                    // Also set up attribute offsets for this class so initializers
+                    // can access other attributes
+                    let old_attribute_offsets = self.attribute_offsets.clone();
+                    self.attribute_offsets.clear();
+                    for (attr_name, _attr_type, attr_offset, _init) in &metadata.attributes {
+                        self.attribute_offsets.insert(attr_name.clone(), *attr_offset);
+                    }
+                    
+                    // Initialize attributes - evaluate initializers if present
+                    for (attr_name, attr_type, attr_offset, attr_init) in &metadata.attributes {
                         instrs.push(LirInstr::comment(format!("init attr {}: {:?}", attr_name, attr_type)));
                         instrs.push(LirInstr::LocalGet(obj_local));
                         
-                        // Default value based on type
-                        let default_value = match attr_type {
-                            TypeId::Int => 0,      // Int defaults to 0
-                            TypeId::Bool => 0,     // Bool defaults to false
-                            TypeId::String => 0,   // String defaults to null (empty string ptr)
-                            _ => 0,                // Reference types default to null (0)
-                        };
-                        instrs.push(LirInstr::I32Const(default_value));
+                        if let Some(init_expr) = attr_init {
+                            // Evaluate the initializer expression
+                            instrs.extend(self.lower_expr(init_expr));
+                        } else {
+                            // Default value based on type
+                            let default_value = match attr_type {
+                                TypeId::Int => 0,      // Int defaults to 0
+                                TypeId::Bool => 0,     // Bool defaults to false
+                                TypeId::String => 0,   // String defaults to null (empty string ptr)
+                                _ => 0,                // Reference types default to null (0)
+                            };
+                            instrs.push(LirInstr::I32Const(default_value));
+                        }
                         instrs.push(LirInstr::I32Store { offset: *attr_offset, align: 4 });
                     }
+                    
+                    // Restore old "self" binding and attribute offsets
+                    if let Some(old) = old_self {
+                        self.locals.insert("self".to_string(), old);
+                    } else {
+                        self.locals.remove("self");
+                    }
+                    self.attribute_offsets = old_attribute_offsets;
                     
                     // Leave the object pointer on the stack as the result
                     instrs.push(LirInstr::LocalGet(obj_local));
