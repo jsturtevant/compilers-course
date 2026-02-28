@@ -74,13 +74,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run lexer on all samples (Unix)
-      if: runner.os != 'Windows'
+    - name: Run lexer on all samples
       run: ./scripts/run-lexer-all.sh
-    
-    - name: Run lexer on all samples (Windows)
-      if: runner.os == 'Windows'
-      run: cargo run -p lexer --quiet -- cool-support/examples/hello_world.cl
       shell: bash
 
   parser-tests:
@@ -110,13 +105,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run parser on all samples (Unix)
-      if: runner.os != 'Windows'
+    - name: Run parser on all samples
       run: ./scripts/run-parser-all.sh
-    
-    - name: Run parser on all samples (Windows)
-      if: runner.os == 'Windows'
-      run: cargo run -p parser --quiet -- cool-support/examples/hello_world.cl
       shell: bash
 
   semant-tests:
@@ -146,13 +136,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run semantic analysis (Unix)
-      if: runner.os != 'Windows'
+    - name: Run semantic analysis
       run: ./scripts/run-semant-all.sh
-    
-    - name: Run semantic analysis (Windows)
-      if: runner.os == 'Windows'
-      run: cargo run -p semant --quiet -- cool-support/examples/hello_world.cl
       shell: bash
 
   wasm-tests:
@@ -196,15 +181,10 @@ jobs:
         echo "$env:USERPROFILE\wasmtime-v19.0.0-x86_64-windows" >> $env:GITHUB_PATH
       shell: pwsh
     
-    - name: Run WASM tests (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        ./scripts/run-codegen-all.sh
-        ./scripts/run-wasmtime-all.sh
+    - name: Run WASM codegen tests
+      run: ./scripts/run-codegen-all.sh
+      shell: bash
     
-    - name: Run WASM tests (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        cargo run -p codegen --quiet -- cool-support/examples/hello_world.cl -o hello_world.wasm
-        wasmtime hello_world.wasm
+    - name: Run WASM execution tests
+      run: ./scripts/run-wasmtime-all.sh
       shell: bash
