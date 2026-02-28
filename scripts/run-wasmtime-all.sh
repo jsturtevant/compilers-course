@@ -62,9 +62,7 @@ for cl_file in cool-support/examples/*.cl; do
     # Skip known unsupported programs before compilation
     case "$filename" in
         hairyscary)
-            echo -e "${YELLOW}⏱${NC} $filename (circular init edge case - skipped)"
-            SKIPPED=$((SKIPPED + 1))
-            continue
+            # hairyscary now works - run it like other tests
             ;;
     esac
     

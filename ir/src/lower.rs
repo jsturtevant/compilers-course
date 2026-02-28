@@ -584,10 +584,11 @@ impl LoweringContext {
                     vec![LirInstr::LocalGet(local_id)]
                 } else if let Some(&attr_offset) = self.attribute_offsets.get(name) {
                     // Attribute access: load from self at the attribute offset
-                    // self is always local 0
+                    // Look up "self" in locals - it might not be local 0 during nested new
+                    let self_local = self.locals.get("self").copied().unwrap_or(0);
                     vec![
                         LirInstr::comment(format!("Load attribute: {}", name)),
-                        LirInstr::LocalGet(0), // self pointer
+                        LirInstr::LocalGet(self_local), // self pointer
                         LirInstr::I32Load { offset: attr_offset, align: 4 },
                     ]
                 } else {
@@ -611,10 +612,11 @@ impl LoweringContext {
                     // Stack has: [value]
                     // We need: self, value on stack for i32.store
                     // But we also need to return the value, so we use a temp local
+                    let self_local = self.locals.get("self").copied().unwrap_or(0);
                     let temp = self.alloc_local(LirType::I32);
                     instrs.push(LirInstr::LocalTee(temp)); // Save value, keep copy on stack
                     instrs.push(LirInstr::Drop); // Drop the copy (we'll reload after store)
-                    instrs.push(LirInstr::LocalGet(0)); // self pointer
+                    instrs.push(LirInstr::LocalGet(self_local)); // self pointer
                     instrs.push(LirInstr::LocalGet(temp)); // value
                     instrs.push(LirInstr::I32Store { offset: attr_offset, align: 4 });
                     instrs.push(LirInstr::LocalGet(temp)); // Return the stored value
