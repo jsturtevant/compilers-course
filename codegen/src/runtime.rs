@@ -34,6 +34,8 @@ pub struct RuntimeFunctions {
 
 /// Global indices
 const HEAP_PTR_GLOBAL: u32 = 0;
+/// Global index for class name table address
+pub const CLASS_NAME_TABLE_GLOBAL: u32 = 1;
 
 /// Add COOL runtime support to a WASM module
 ///
@@ -42,9 +44,12 @@ const HEAP_PTR_GLOBAL: u32 = 0;
 /// 2. Adds heap pointer global
 /// 3. Defines runtime functions for allocator, Object, IO, and String
 /// 4. Returns function indices for use in codegen
-pub fn add_runtime(module: &mut WasmModule, heap_start: u32) -> RuntimeFunctions {
+pub fn add_runtime(module: &mut WasmModule, heap_start: u32, class_name_table_addr: u32) -> RuntimeFunctions {
     // Add heap pointer global (starts after static data)
     module.add_global(ValType::I32, true, heap_start as i32);
+    
+    // Add class name table address global
+    module.add_global(ValType::I32, false, class_name_table_addr as i32);
 
     // WASI imports
     // fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
@@ -162,15 +167,40 @@ fn add_object_abort(module: &mut WasmModule) -> u32 {
 ///
 /// Returns the class name as a String object.
 /// Object pointer at offset 0 contains class_tag.
-/// TODO: Implement class name table lookup.
+/// Uses global CLASS_NAME_TABLE_GLOBAL which points to an array of String pointers,
+/// indexed by class_tag.
 fn add_object_type_name(module: &mut WasmModule) -> u32 {
     let type_idx = module.add_type(vec![ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
 
+    // Local 0: self (object pointer)
     let mut func = Function::new([]);
-    // TODO: Load class_tag from object, lookup in class metadata table
-    // For now: return null (0)
-    func.instruction(&Instruction::I32Const(0));
+    
+    // Get class name table base address
+    func.instruction(&Instruction::GlobalGet(CLASS_NAME_TABLE_GLOBAL));
+    
+    // Load class_tag from object at offset 0
+    func.instruction(&Instruction::LocalGet(0)); // self
+    func.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    
+    // Calculate offset: class_tag * 4 (each entry is a 4-byte pointer)
+    func.instruction(&Instruction::I32Const(4));
+    func.instruction(&Instruction::I32Mul);
+    
+    // Add to base address
+    func.instruction(&Instruction::I32Add);
+    
+    // Load the String pointer from the table
+    func.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    
     func.instruction(&Instruction::End);
 
     module.add_code(func);

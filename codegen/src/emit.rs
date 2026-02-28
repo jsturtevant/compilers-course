@@ -146,6 +146,34 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     // Export memory for debugging
     module.export_memory("memory");
 
+    // Collect all class names (builtins first, then user classes sorted by class_tag)
+    // Builtin class tags: Object=0, IO=1, String=2, Int=3, Bool=4
+    let builtin_class_names = vec!["Object", "IO", "String", "Int", "Bool"];
+    let mut all_class_names: Vec<(usize, &str)> = builtin_class_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (i, *name))
+        .collect();
+    
+    // Add user classes from HIR
+    for class in &hir.classes {
+        // Skip if it's a builtin (class_tag < 5)
+        if class.class_tag >= 5 {
+            all_class_names.push((class.class_tag, &class.name));
+        }
+    }
+    // Sort by class_tag to ensure correct ordering
+    all_class_names.sort_by_key(|(tag, _)| *tag);
+    
+    // Calculate memory layout for class name table
+    // Class name table at 0x1800 (between iovec at 0x1000 and strings at 0x2000)
+    let class_name_table_addr: u32 = 0x1800;
+    let num_classes = all_class_names.len();
+    // Each entry is a 4-byte pointer
+    let class_name_table_size = (num_classes * 4) as u32;
+    // String objects start after the table, aligned
+    let class_name_strings_start = ((class_name_table_addr + class_name_table_size + 15) / 16) * 16;
+
     // Calculate heap start address (must be after all static data)
     // Layout: strings at 0x2000, vtables after strings
     let num_strings = program.string_data.len() as u32;
@@ -166,8 +194,8 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     // Heap starts after vtables, aligned to 256-byte boundary
     let heap_start = ((vtable_offset + vtables_size + 255) / 256) * 256;
 
-    // Add runtime functions (Object, IO, String)
-    let runtime = add_runtime(&mut module, heap_start);
+    // Add runtime functions (Object, IO, String), passing class name table address
+    let runtime = add_runtime(&mut module, heap_start, class_name_table_addr);
     
     let mut ctx = EmitContext::new(runtime);
 
@@ -334,6 +362,40 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     
     // Register Bool constant addresses in context
     ctx.set_bool_addrs(bool_false_addr, bool_true_addr);
+
+    // Create class name String objects and lookup table for Object.type_name()
+    // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
+    let string_vtable_addr = ctx.get_vtable_address("String").unwrap_or(0);
+    
+    // Build the class name String objects
+    let mut current_string_addr = class_name_strings_start;
+    let mut class_name_string_addrs: Vec<u32> = Vec::new();
+    
+    for (_class_tag, class_name) in &all_class_names {
+        let bytes = class_name.as_bytes();
+        let length = bytes.len() as i32;
+        let total_size = 16 + bytes.len();
+        
+        let mut data = Vec::new();
+        data.extend_from_slice(&2i32.to_le_bytes()); // class_tag = 2 (String)
+        data.extend_from_slice(&(total_size as i32).to_le_bytes()); // size
+        data.extend_from_slice(&(string_vtable_addr as i32).to_le_bytes()); // vtable_ptr
+        data.extend_from_slice(&length.to_le_bytes()); // length
+        data.extend_from_slice(bytes); // data
+        
+        module.add_data(current_string_addr, data);
+        class_name_string_addrs.push(current_string_addr);
+        
+        // Align next string to 4-byte boundary
+        current_string_addr += ((total_size as u32 + 3) / 4) * 4;
+    }
+    
+    // Build the class name lookup table (array of pointers)
+    let mut table_data = Vec::new();
+    for addr in &class_name_string_addrs {
+        table_data.extend_from_slice(&(*addr as i32).to_le_bytes());
+    }
+    module.add_data(class_name_table_addr, table_data);
 
     // Add string literals to data section AFTER vtable addresses are known
     // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
