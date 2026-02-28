@@ -130,6 +130,7 @@ where
             .then_ignore(just(Token::Of))
             .then(
                 case_branch
+                    .padded_by(just(Token::Comment).repeated())
                     .separated_by(just(Token::Semicolon))
                     .allow_trailing()
                     .at_least(1)
@@ -163,7 +164,18 @@ where
         ))
         .padded_by(just(Token::Comment).repeated());
 
-        let term = atom.foldl(
+        let call = ident
+            .then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+            )
+            .map(|(name, args)| ast::Expr::FuncCall { name, args });
+
+        // term can start with either atom or a function call, and both can be followed by dispatch chains
+        let term = choice((call, atom)).foldl(
             just(Token::Dot)
                 .ignore_then(ident)
                 .then(
@@ -195,25 +207,15 @@ where
             },
         );
 
-        let call = ident
-            .then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-            )
-            .map(|(name, args)| ast::Expr::FuncCall { name, args });
-
         // Binary operators with precedence
-        let factor = choice((call, term));
+        let factor = term;
 
         let unary = just(Token::Not)
             .or(just(Token::Tilde))
             .repeated()
             .foldr(factor, |op, expr| match op {
                 Token::Not => ast::Expr::Not(Box::new(expr)),
-                Token::Tilde => ast::Expr::Not(Box::new(expr)), // Use Not for now, could add Negate later
+                Token::Tilde => ast::Expr::Negate(Box::new(expr)),
                 _ => unreachable!(),
             });
 
@@ -266,49 +268,54 @@ where
         .then(type_id)
         .map(|(name, typ)| ast::Formal { name, typ });
 
-    let method_feature = ident
-        .then(
+    // Parse features: need to distinguish method (has parens) from attribute (no parens)
+    // We parse the identifier, then check if next token is LeftParen (method) or Colon (attribute)
+    let feature = ident
+        .then(choice((
+            // Method: ident ( formals ) : Type { body }
             formal
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .collect::<Vec<_>>()
-                .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-        )
-        .then_ignore(just(Token::Colon))
-        .then(type_id)
-        .padded_by(just(Token::Comment).repeated())
-        .then(
-            expr.clone()
-                .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
-        )
-        .map(|(((name, formals), return_type), body)| {
-            ast::Feature::Method(ast::MethodFeature {
-                name,
-                formals,
-                return_type,
-                body,
-            })
-        });
-
-    let attribute_feature = ident
-        .then_ignore(just(Token::Colon))
-        .then(type_id)
-        .then(just(Token::Assign).ignore_then(expr.clone()).or_not())
-        .map(|((name, attr_type), init)| {
-            ast::Feature::Attribute(ast::AttributeFeature {
-                name,
-                attr_type,
-                init,
-            })
-        });
-
-    let feature = choice((method_feature, attribute_feature)).then_ignore(just(Token::Semicolon));
+                .delimited_by(just(Token::LeftParen), just(Token::RightParen))
+                .then_ignore(just(Token::Colon))
+                .then(type_id)
+                .padded_by(just(Token::Comment).repeated())
+                .then(
+                    expr.clone()
+                        .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
+                )
+                .map(|((formals, return_type), body)| (true, formals, return_type, body, None)),
+            // Attribute: ident : Type [ <- expr ]
+            just(Token::Colon)
+                .ignore_then(type_id)
+                .then(just(Token::Assign).ignore_then(expr.clone()).or_not())
+                .map(|(attr_type, init)| (false, vec![], attr_type, ast::Expr::Integer(0), init)),
+        )))
+        .map(|(name, (is_method, formals, typ, body, init))| {
+            if is_method {
+                ast::Feature::Method(ast::MethodFeature {
+                    name,
+                    formals,
+                    return_type: typ,
+                    body,
+                })
+            } else {
+                ast::Feature::Attribute(ast::AttributeFeature {
+                    name,
+                    attr_type: typ,
+                    init,
+                })
+            }
+        })
+        .then_ignore(just(Token::Semicolon));
 
     let class = just(Token::Class)
         .ignore_then(type_id)
         .then(just(Token::Inherits).ignore_then(type_id).or_not())
         .then(
             feature
+                .padded_by(just(Token::Comment).repeated())
                 .repeated()
                 .collect()
                 .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
