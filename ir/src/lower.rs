@@ -11,6 +11,10 @@ pub struct LoweringContext {
     locals: HashMap<String, u32>,
     /// Track all locals for function signature
     local_types: Vec<LirType>,
+    /// String literals collected during lowering
+    string_literals: Vec<String>,
+    /// Next string data offset
+    next_string_offset: u32,
 }
 
 impl LoweringContext {
@@ -20,6 +24,8 @@ impl LoweringContext {
             next_label_id: 0,
             locals: HashMap::new(),
             local_types: Vec::new(),
+            string_literals: Vec::new(),
+            next_string_offset: 0x2000, // Start strings at 8KB
         }
     }
 
@@ -75,12 +81,21 @@ impl LoweringContext {
             }
         }
 
-        // TODO: Add built-in runtime functions (IO, String operations, etc.)
+        // Create string data section entries
+        let mut string_data = Vec::new();
+        for (i, s) in self.string_literals.iter().enumerate() {
+            let offset = 0x2000 + (i as u32) * 128; // 128 bytes per string max
+            string_data.push(StringData {
+                offset,
+                value: s.clone(),
+            });
+        }
         
         LirProgram {
             functions,
             globals: Vec::new(),
             vtables,
+            string_data,
         }
     }
 
@@ -153,10 +168,14 @@ impl LoweringContext {
             }
 
             HirExpr::StringLiteral { value, .. } => {
-                // TODO: Allocate string object in data section, return pointer
+                // Allocate string in data section
+                let str_index = self.string_literals.len();
+                self.string_literals.push(value.clone());
+                let offset = 0x2000 + (str_index as u32) * 128;
+                
                 vec![
                     LirInstr::comment(format!("String literal: {}", value)),
-                    LirInstr::I32Const(0), // Placeholder: return null for now
+                    LirInstr::I32Const(offset as i32),
                 ]
             }
 
@@ -360,6 +379,14 @@ impl LoweringContext {
             HirExpr::Dispatch { object, dispatch_info, args, .. } => {
                 let mut instrs = Vec::new();
                 
+                // For now, use direct dispatch as we're not yet implementing vtables
+                // Call the method directly: ClassName_methodName
+                instrs.push(LirInstr::comment(format!(
+                    "Dispatch {}.{}",
+                    dispatch_info.class_name,
+                    dispatch_info.method_name
+                )));
+                
                 // Evaluate object (receiver)
                 instrs.extend(self.lower_expr(object));
                 
@@ -368,18 +395,9 @@ impl LoweringContext {
                     instrs.extend(self.lower_expr(arg));
                 }
                 
-                // Load vtable and call indirect
-                instrs.push(LirInstr::comment(format!(
-                    "Dispatch {}.{}",
-                    dispatch_info.class_name,
-                    dispatch_info.method_name
-                )));
-                
-                // TODO: Load vtable pointer from object, index into vtable
-                instrs.push(LirInstr::CallIndirect {
-                    type_index: 0, // TODO: Calculate type index
-                    method_index: dispatch_info.method_index as u32,
-                });
+                // Direct call for MVP
+                let func_name = format!("{}_{}", dispatch_info.class_name, dispatch_info.method_name);
+                instrs.push(LirInstr::Call(func_name));
                 instrs
             }
 

@@ -38,8 +38,8 @@ pub fn compile_hir(hir: &HirProgram) -> Result<Vec<u8>, CompileError> {
     let mut ctx = LoweringContext::new();
     let lir = ctx.lower_program(hir);
 
-    // Emit WASM from LIR
-    let wasm = emit::emit_module(&lir)
+    // Emit WASM from LIR (pass HIR for _start generation)
+    let wasm = emit::emit_module(&lir, hir)
         .map_err(CompileError::EmissionError)?;
 
     Ok(wasm)

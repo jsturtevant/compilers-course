@@ -88,7 +88,7 @@ impl Default for EmitContext {
 }
 
 /// Emit a complete WASM module from LIR program
-pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
+pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Vec<u8>, String> {
     let mut module = WasmModule::new();
 
     // Initialize memory (1 page = 64KB for static data + heap)
@@ -96,6 +96,34 @@ pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
 
     // Export memory for debugging
     module.export_memory("memory");
+
+    // Add string literals to data section
+    // String layout: [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
+    for string_data in &program.string_data {
+        let bytes = string_data.value.as_bytes();
+        let length = bytes.len() as i32;
+        
+        // Build string object in memory: header + data
+        let mut data = Vec::new();
+        
+        // class_tag (String class tag - use 0 for now)
+        data.extend_from_slice(&0i32.to_le_bytes());
+        
+        // size (total size of object)
+        let total_size = 16 + bytes.len();
+        data.extend_from_slice(&(total_size as i32).to_le_bytes());
+        
+        // vtable_ptr (0 for now)
+        data.extend_from_slice(&0i32.to_le_bytes());
+        
+        // length (number of characters)
+        data.extend_from_slice(&length.to_le_bytes());
+        
+        // string data
+        data.extend_from_slice(bytes);
+        
+        module.add_data(string_data.offset, data);
+    }
 
     // Add runtime functions (Object, IO, String)
     let runtime = add_runtime(&mut module);
@@ -109,6 +137,18 @@ pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
         let func_idx = (i + 13) as u32;
         ctx.register_function(func.name.clone(), func_idx);
     }
+    
+    // Register built-in class methods to runtime functions
+    ctx.register_function("IO_out_string".to_string(), runtime.io_out_string);
+    ctx.register_function("IO_out_int".to_string(), runtime.io_out_int);
+    ctx.register_function("IO_in_string".to_string(), runtime.io_in_string);
+    ctx.register_function("IO_in_int".to_string(), runtime.io_in_int);
+    ctx.register_function("Object_abort".to_string(), runtime.object_abort);
+    ctx.register_function("Object_type_name".to_string(), runtime.object_type_name);
+    ctx.register_function("Object_copy".to_string(), runtime.object_copy);
+    ctx.register_function("String_length".to_string(), runtime.string_length);
+    ctx.register_function("String_concat".to_string(), runtime.string_concat);
+    ctx.register_function("String_substr".to_string(), runtime.string_substr);
 
     // Add type signatures and function declarations
     for func in &program.functions {
@@ -133,20 +173,64 @@ pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
     // Create _start wrapper function for WASI
     // WASI requires _start to have signature () -> ()
     if let Some(main_idx) = ctx.get_function("Main_main") {
-        let start_type = module.add_type(vec![], vec![]);
-        let start_idx = module.add_function(start_type);
+        // Find Main class in HIR to get class_tag and size
+        let main_class = hir.classes.iter().find(|c| c.name == "Main");
         
-        let mut start_func = Function::new([]);
-        // Allocate a Main object (stub for now - just use null/0)
-        start_func.instruction(&Instruction::I32Const(0));
-        // Call Main.main() - it takes self and returns i32
-        start_func.instruction(&Instruction::Call(main_idx));
-        // Drop the return value
-        start_func.instruction(&Instruction::Drop);
-        start_func.instruction(&Instruction::End);
-        
-        module.add_code(start_func);
-        module.export_function("_start", start_idx);
+        if let Some(main_class) = main_class {
+            let start_type = module.add_type(vec![], vec![]);
+            let start_idx = module.add_function(start_type);
+            
+            // Calculate Main object size:
+            // Header: 12 bytes (class_tag: 4, size: 4, vtable_ptr: 4)
+            // Attributes: 4 bytes each
+            let obj_size = 12 + (main_class.attributes.len() * 4);
+            
+            // Local 0: object pointer (i32)
+            let mut start_func = Function::new([(1, ValType::I32)]);
+            
+            // Allocate Main object: call $alloc with size
+            start_func.instruction(&Instruction::I32Const(obj_size as i32));
+            start_func.instruction(&Instruction::Call(ctx.runtime().alloc));
+            
+            // Initialize object header
+            // Store class_tag at offset 0
+            start_func.instruction(&Instruction::LocalTee(0)); // Save pointer
+            start_func.instruction(&Instruction::I32Const(main_class.class_tag as i32));
+            start_func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            
+            // Store size at offset 4
+            start_func.instruction(&Instruction::LocalGet(0));
+            start_func.instruction(&Instruction::I32Const(obj_size as i32));
+            start_func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: 0,
+            }));
+            
+            // Store vtable_ptr at offset 8 (0 for now, will be set when vtables are implemented)
+            start_func.instruction(&Instruction::LocalGet(0));
+            start_func.instruction(&Instruction::I32Const(0));
+            start_func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            
+            // Call Main.main() with the object pointer - it returns SELF_TYPE (i32 pointer)
+            start_func.instruction(&Instruction::LocalGet(0));
+            start_func.instruction(&Instruction::Call(main_idx));
+            
+            // Drop the return value
+            start_func.instruction(&Instruction::Drop);
+            start_func.instruction(&Instruction::End);
+            
+            module.add_code(start_func);
+            module.export_function("_start", start_idx);
+        }
     }
 
     // TODO: Emit vtables in data section

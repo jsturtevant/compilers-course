@@ -6,6 +6,14 @@ pub struct LirProgram {
     pub functions: Vec<LirFunction>,
     pub globals: Vec<LirGlobal>,
     pub vtables: Vec<VTable>,
+    pub string_data: Vec<StringData>,
+}
+
+/// String literal data for data section
+#[derive(Debug, Clone)]
+pub struct StringData {
+    pub offset: u32,
+    pub value: String,
 }
 
 /// LIR Function

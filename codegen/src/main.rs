@@ -3,7 +3,6 @@
 //! Command-line interface for compiling COOL programs to WebAssembly.
 
 use codegen::compile_hir;
-use ir::hir::{HirProgram, HirClass, HirMethod, HirExpr, TypeId};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -21,8 +20,8 @@ fn main() {
         input_path.replace(".cl", ".wasm")
     };
 
-    // Read input file (for validation, but not used yet)
-    let _source = match std::fs::read_to_string(input_path) {
+    // Read input file
+    let source = match std::fs::read_to_string(input_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading input file: {}", e);
@@ -32,11 +31,40 @@ fn main() {
 
     println!("Compiling {} to {}", input_path, output_path);
 
-    // TODO: Integrate with lexer, parser, semant, and ast_to_hir
-    // For now, create a stub HIR program for testing
-    let hir = create_test_hir();
+    // Full compilation pipeline: Parser → Semant → AST-to-HIR → Codegen
+    
+    // 1. Parsing (includes lexing)
+    let ast = match parser::parse_source(&source) {
+        Ok(ast) => ast,
+        Err(errors) => {
+            eprintln!("Parse errors:");
+            for error in errors {
+                eprintln!("  {}", error);
+            }
+            std::process::exit(1);
+        }
+    };
 
-    // Compile HIR to WASM
+    // 2. Semantic analysis
+    let mut analyzer = semant::SemanticAnalyzer::new();
+    if let Err(errors) = analyzer.analyze(&ast) {
+        eprintln!("Semantic errors:");
+        for error in errors {
+            eprintln!("  {:?}", error);
+        }
+        std::process::exit(1);
+    }
+
+    // 3. AST to HIR
+    let hir = match ir::ast_to_hir::lower_program(&ast, &analyzer) {
+        Ok(hir) => hir,
+        Err(e) => {
+            eprintln!("HIR lowering error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // 4. Compile HIR to WASM
     match compile_hir(&hir) {
         Ok(wasm_bytes) => {
             // Write output
@@ -60,37 +88,4 @@ fn print_usage(program_name: &str) {
     eprintln!();
     eprintln!("Options:");
     eprintln!("  -o <output>    Specify output file (default: input with .wasm extension)");
-}
-
-/// Create a test HIR program for demonstration
-fn create_test_hir() -> HirProgram {
-    HirProgram {
-        classes: vec![
-            HirClass {
-                name: "Main".to_string(),
-                parent: None,
-                class_tag: 0,
-                attributes: vec![],
-                methods: vec![
-                    HirMethod {
-                        name: "main".to_string(),
-                        formals: vec![],
-                        return_type: TypeId::Int,
-                        body: HirExpr::Add {
-                            left: Box::new(HirExpr::IntLiteral {
-                                value: 40,
-                                typ: TypeId::Int,
-                            }),
-                            right: Box::new(HirExpr::IntLiteral {
-                                value: 2,
-                                typ: TypeId::Int,
-                            }),
-                            typ: TypeId::Int,
-                        },
-                        vtable_index: 0,
-                    }
-                ],
-            }
-        ],
-    }
 }

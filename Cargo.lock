@@ -163,6 +163,9 @@ name = "codegen"
 version = "0.1.0"
 dependencies = [
  "ir",
+ "lexer",
+ "parser",
+ "semant",
  "wasm-encoder",
 ]
 

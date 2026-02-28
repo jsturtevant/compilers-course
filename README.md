@@ -7,6 +7,12 @@ A collection of compiler implementation projects for a compilers course, focusin
 - **[lexer/](lexer/)** - Lexical analyzer for COOL language built with Rust and logos
 - **[parser/](parser/)** - Parser for COOL language using Chumsky parser combinators
 
+## Quick Start
+
+```bash
+cargo run --bin cool-wasm -- cool-support/examples/hello_world.cl -o hello.wasm && wasmtime run hello.wasm
+```
+
 ## Getting Started
 
 Each project directory contains its own README with specific build and run instructions.

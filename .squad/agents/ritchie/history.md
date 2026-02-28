@@ -234,3 +234,49 @@ Each phase is a standalone executable that reads/writes text formats via stdin/s
 - Test actual execution with wasmtime run
 
 ---
+
+### _start Integration Complete — 2025-01-02
+
+**Status:** Phase 5 complete — _start now properly calls Main.main() with object allocation.
+
+**Problem Identified:** The codegen binary (`cargo run -p codegen`) was using a stub HIR generator that always returned `40 + 2`, ignoring the actual COOL source code. Programs compiled but produced no output because Main.main() was never actually called with real method bodies.
+
+**Root Cause:** 
+- `codegen/src/main.rs` had a TODO comment and `create_test_hir()` stub function
+- The frontend pipeline (lexer → parser → semant → ast_to_hir) existed but wasn't wired up
+- `ir/src/ast_to_hir.rs` module existed with full AST-to-HIR lowering but wasn't being used
+
+**Solution Implemented:**
+1. **Integrated full pipeline into codegen/src/main.rs:**
+   - Added dependencies: `parser`, `semant`, `lexer` to `codegen/Cargo.toml`
+   - Replaced stub HIR with real pipeline: `parser::parse_source()` → `semant::SemanticAnalyzer` → `ir::ast_to_hir::lower_program()`
+   - Removed `create_test_hir()` stub
+
+2. **Enhanced _start function in emit.rs:**
+   - Modified `emit_module()` signature to accept both LIR and HIR (needed Main class metadata)
+   - _start now:
+     a. Finds Main class from HIR to get class_tag and calculate object size
+     b. Allocates Main object using `$alloc` (size = 12 bytes header + 4*attributes.len())
+     c. Initializes object header (stores class_tag at offset 0, size at offset 4, vtable_ptr at offset 8)
+     d. Calls Main.main() with the object pointer (not null/0)
+     e. Drops return value and exits
+
+3. **Object Layout Confirmed:**
+   - Header: 12 bytes (class_tag: i32, size: i32, vtable_ptr: i32)
+   - Attributes: 4 bytes each (i32 pointers)
+   - Main class with 0 attributes = 12 bytes total
+
+**Validation:**
+- `hello_world.cl` now outputs `"Hello, World.\n"` correctly when run with wasmtime
+- The IO.out_string method (implemented in Phase 4) is now actually being called
+- Program flow: _start → allocate Main → call Main.main() → dispatch to IO.out_string → WASI fd_write
+
+**Files Modified:**
+- `codegen/src/main.rs` — Full pipeline integration
+- `codegen/Cargo.toml` — Added frontend dependencies
+- `codegen/src/emit.rs` — Updated emit_module signature, enhanced _start generation
+- `codegen/src/compile.rs` — Pass HIR to emit_module
+
+**Result:** End-to-end compilation now works! COOL source → parse → semant → HIR → LIR → WASM → execution with actual output.
+
+---

@@ -460,3 +460,182 @@ cargo test -p semant     # ✅ 29/29 tests pass
 - Bounds checking for string operations (optional enhancement)
 - Garbage collection (future work - currently arena allocation only)
 
+
+---
+
+## Expression Lowering Implementation (HIR → LIR → WASM) (2026-02-27)
+
+### Task: Complete expression lowering pipeline
+
+**Objective:** Enable actual program execution by implementing expression lowering from HIR to LIR to WASM, with focus on getting hello_world.cl to print output.
+
+### Implementation
+
+**1. String Literal Support**
+- Added `string_literals: Vec<String>` to `LoweringContext` in `ir/src/lower.rs`
+- String literals collected during HIR→LIR lowering
+- Each string assigned fixed offset in data section: `0x2000 + (index * 128)`
+- String data emitted with proper object layout:
+  ```
+  [class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]
+  ```
+- Updated `LirProgram` to include `string_data: Vec<StringData>`
+- Codegen emits strings to WASM data section with `module.add_data()`
+
+**2. Method Dispatch Resolution**
+- **Problem:** When `Main.out_string("...")` called, HIR generated `Main_out_string` function name, but method is defined in parent class `IO`
+- **Solution:** Added method ownership tracking:
+  - Created `method_owners: HashMap<(String, String), String>` mapping `(class, method) → defining_class`
+  - Implemented `find_method_owner()` that walks inheritance chain using `ClassHierarchy`
+  - Uses `class_hierarchy.get_class()` to check which class defines each method
+  - Updated both `Dispatch` and `FuncCall` AST lowering to use correct defining class
+- **Result:** `Main.out_string()` correctly resolves to `IO_out_string` runtime function
+
+**3. Runtime Function Registration**
+- Added built-in class method mappings in `emit.rs`:
+  ```rust
+  ctx.register_function("IO_out_string", runtime.io_out_string);
+  ctx.register_function("IO_out_int", runtime.io_out_int);
+  // ... all Object, IO, String methods
+  ```
+- Ensures dispatch calls resolve to correct WASI runtime functions
+
+**4. Direct Dispatch for MVP**
+- Simplified HIR→LIR dispatch lowering to use direct calls instead of vtable indirection
+- Format: `ClassName_methodName` function calls
+- Pushes object pointer (self) followed by arguments
+- Example: `self.out_string("Hello")` → `Call("IO_out_string")`
+
+### Files Modified
+
+**ir/src/lower.rs:**
+- Added `string_literals` and `string_data` tracking
+- Modified `lower_expr()` for `StringLiteral` to allocate and track strings
+- Updated `lower_program()` to emit `StringData` entries
+- Changed `Dispatch` lowering to use direct calls instead of CallIndirect
+
+**ir/src/lir.rs:**
+- Added `StringData` struct: `{ offset: u32, value: String }`
+- Updated `LirProgram` to include `string_data: Vec<StringData>`
+
+**ir/src/ast_to_hir.rs:**
+- Added `method_owners: HashMap<(String, String), String>` to `Lowerer`
+- Implemented `build_vtable_and_owners()` - builds vtables and tracks method ownership
+- Implemented `find_method_owner()` - walks inheritance chain to find defining class
+- Updated `FuncCall` lowering to use `defining_class` instead of `current_class`
+- Updated `Dispatch` lowering to use `defining_class` for both dynamic and static dispatch
+
+**codegen/src/emit.rs:**
+- Added string data section emission in `emit_module()`:
+  - Iterates `program.string_data`
+  - Creates string objects in memory with proper layout
+  - Calls `module.add_data(offset, bytes)` for each string
+- Registered built-in class methods to runtime function indices
+- Maps `IO_out_string`, `Object_abort`, `String_concat`, etc. to runtime functions
+
+**semant/src/class_hierarchy.rs:**
+- Added `get_parent(class_name) -> Option<String>` method
+- Enables inheritance chain traversal for method resolution
+
+### Testing Results
+
+**hello_world.cl:**
+```bash
+$ wasmtime hello_world.wasm
+"Hello, World.\n"
+```
+✅ **SUCCESS** - First program executing and producing output!
+
+**arith.cl:**
+- Partially working - method resolution fixes allowed it to progress further
+- Still fails on `A2I_abort` - needs `Object` class method resolution
+- Shows inherited method lookup is working (`A_set_var` now found)
+
+**Overall Test Run:**
+- `hello_world.cl` executes successfully ✅
+- Many programs fail due to missing expression types (expected for phase 5)
+- Runtime errors show WASM is being generated and validated
+
+### Key Debugging Steps
+
+1. **Initial Issue:** No output from hello_world.wasm
+   - Root cause: String not emitted to data section
+   - Fix: Added string_data collection in lower.rs
+
+2. **Second Issue:** Still no output
+   - Root cause: Method dispatch resolution incorrect
+   - `Main.out_string()` looked for `Main_out_string` (doesn't exist)
+   - Should resolve to `IO_out_string` (parent class)
+   - Fix: Implemented method ownership tracking
+
+3. **Third Issue:** Runtime function not found
+   - Root cause: Built-in methods not registered in EmitContext
+   - Fix: Added explicit registration of IO/Object/String runtime functions
+
+### Technical Decisions
+
+**String Storage:**
+- Fixed offsets starting at 0x2000 (8KB)
+- 128 bytes allocated per string (wasteful but simple)
+- Future: Pack strings contiguously with length prefix
+
+**Method Resolution:**
+- Two-phase approach:
+  1. Build method ownership map during vtable construction
+  2. Look up defining class during HIR lowering
+- Alternative considered: Dynamic lookup during codegen (rejected - too late)
+
+**Direct vs. Indirect Dispatch:**
+- Using direct calls for MVP
+- Vtable infrastructure exists but not yet wired up
+- Future: Switch to CallIndirect for dynamic dispatch
+
+### Limitations
+
+**Not Yet Implemented:**
+- Integer arithmetic expressions (need Int boxing/unboxing decisions)
+- If/while control flow (structured, labels exist in LIR)
+- Let bindings (local variable allocation)
+- New expressions (object allocation with proper initialization)
+- Case expressions (type-based dispatch)
+- Attribute access (need memory layout)
+- Static dispatch (@Type.method)
+
+**Workarounds:**
+- Abort method still maps to stub (causes runtime errors in complex programs)
+- Parent class method resolution only checks immediate parent (doesn't walk full chain)
+  - Fixed with `get_parent()` and iterative lookup
+
+### Commands Used
+
+```bash
+# Build and test
+cargo build
+./target/debug/coolc samples/hello_world.cl -o hello_world.wasm
+wasmtime hello_world.wasm
+
+# Verify string in WASM
+hexdump -C hello_world.wasm | grep "Hello"
+
+# Test all samples
+./scripts/run-wasmtime-all.sh
+```
+
+### Impact
+
+**Phase Completion:**
+- ✅ String literals working
+- ✅ Method dispatch working (with inheritance)
+- ✅ IO.out_string() functional via WASI
+- ⚠️ Integer/arithmetic pending
+- ⚠️ Control flow pending
+- ⚠️ Object allocation pending
+
+**Next Priority:**
+1. Integer literals and arithmetic (`+`, `-`, `*`, `/`)
+2. If/then/else control flow
+3. While loops
+4. Let bindings
+5. New/object allocation
+
+---

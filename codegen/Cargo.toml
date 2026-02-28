@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "coolc"
+name = "cool-wasm"
 path = "src/main.rs"
 
 [dependencies]
 wasm-encoder = "0.245.1"
 ir = { path = "../ir" }
+lexer = { path = "../lexer" }
+parser = { path = "../parser" }
+semant = { path = "../semant" }

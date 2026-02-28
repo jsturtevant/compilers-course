@@ -290,6 +290,12 @@ impl ClassHierarchy {
     pub fn class_exists(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
+    
+    /// Get the parent class name for a given class
+    pub fn get_parent(&self, class_name: &str) -> Option<String> {
+        self.classes.get(class_name)
+            .and_then(|info| info.parent.clone())
+    }
 
     /// Get all attributes for a class including inherited ones
     pub fn get_all_attributes(&self, class_name: &str) -> HashMap<String, String> {

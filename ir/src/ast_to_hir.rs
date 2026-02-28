@@ -17,6 +17,8 @@ struct Lowerer<'a> {
     class_hierarchy: &'a ClassHierarchy,
     class_tags: HashMap<String, usize>,
     vtables: HashMap<String, Vec<String>>,
+    /// Maps (class_name, method_name) -> defining_class_name
+    method_owners: HashMap<(String, String), String>,
     current_class: Option<String>,
 }
 
@@ -26,6 +28,7 @@ impl<'a> Lowerer<'a> {
             class_hierarchy: analyzer.class_hierarchy(),
             class_tags: HashMap::new(),
             vtables: HashMap::new(),
+            method_owners: HashMap::new(),
             current_class: None,
         }
     }
@@ -38,9 +41,9 @@ impl<'a> Lowerer<'a> {
             next_tag += 1;
         }
 
-        // Build vtables for all classes
+        // Build vtables and method ownership tracking for all classes
         for class in &program.classes {
-            self.build_vtable(&class.name);
+            self.build_vtable_and_owners(&class.name, class);
         }
 
         // Lower each class
@@ -55,16 +58,51 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn build_vtable(&mut self, class_name: &str) {
+    fn build_vtable_and_owners(&mut self, class_name: &str, class: &Class) {
         let mut vtable = Vec::new();
         
         // Get all methods (including inherited) in order
         let methods = self.class_hierarchy.get_all_methods(class_name);
         for (method_name, _sig) in methods {
-            vtable.push(method_name);
+            vtable.push(method_name.clone());
+            
+            // Determine which class defines this method
+            let defining_class = self.find_method_owner(class_name, &method_name, class);
+            self.method_owners.insert(
+                (class_name.to_string(), method_name),
+                defining_class
+            );
         }
 
         self.vtables.insert(class_name.to_string(), vtable);
+    }
+    
+    fn find_method_owner(&self, class_name: &str, method_name: &str, class: &Class) -> String {
+        // Check if this class defines the method
+        for feature in &class.features {
+            if let Feature::Method(m) = feature {
+                if m.name == method_name {
+                    return class_name.to_string();
+                }
+            }
+        }
+        
+        // Walk up inheritance chain to find which class defines it
+        let mut current = class.parent.clone();
+        while let Some(parent_name) = current {
+            // Use class_hierarchy to check if this parent defines the method
+            if let Some(parent_info) = self.class_hierarchy.get_class(&parent_name) {
+                if parent_info.methods.contains_key(method_name) {
+                    return parent_name.clone();
+                }
+            }
+            
+            // Try next parent
+            current = self.class_hierarchy.get_parent(&parent_name);
+        }
+        
+        // Default to current class if we can't find it
+        class_name.to_string()
     }
 
     fn get_vtable_index(&self, class_name: &str, method_name: &str) -> usize {
@@ -412,11 +450,17 @@ impl<'a> Lowerer<'a> {
                     // Static dispatch: expr@Type.method(args)
                     let method_index = self.get_vtable_index(static_class, method);
                     
+                    // Find which class actually defines this method
+                    let defining_class = self.method_owners
+                        .get(&(static_class.clone(), method.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| static_class.clone());
+                    
                     Ok(HirExpr::StaticDispatch {
                         object,
                         type_name: static_class.clone(),
                         dispatch_info: DispatchInfo {
-                            class_name: static_class.clone(),
+                            class_name: defining_class,
                             method_name: method.clone(),
                             method_index,
                         },
@@ -433,10 +477,16 @@ impl<'a> Lowerer<'a> {
                     
                     let method_index = self.get_vtable_index(&class_name, method);
                     
+                    // Find which class actually defines this method
+                    let defining_class = self.method_owners
+                        .get(&(class_name.clone(), method.clone()))
+                        .cloned()
+                        .unwrap_or(class_name.clone());
+                    
                     Ok(HirExpr::Dispatch {
                         object,
                         dispatch_info: DispatchInfo {
-                            class_name,
+                            class_name: defining_class,
                             method_name: method.clone(),
                             method_index,
                         },
@@ -464,13 +514,19 @@ impl<'a> Lowerer<'a> {
                     hir_args.push(self.lower_expr(arg)?);
                 }
 
-                let class_name = current_class_copy.unwrap_or_else(|| "Object".to_string());
+                let class_name = current_class_copy.clone().unwrap_or_else(|| "Object".to_string());
                 let method_index = self.get_vtable_index(&class_name, name);
+                
+                // Find which class actually defines this method
+                let defining_class = self.method_owners
+                    .get(&(class_name.clone(), name.clone()))
+                    .cloned()
+                    .unwrap_or(class_name.clone());
 
                 Ok(HirExpr::Dispatch {
                     object: self_expr,
                     dispatch_info: DispatchInfo {
-                        class_name,
+                        class_name: defining_class,
                         method_name: name.clone(),
                         method_index,
                     },
