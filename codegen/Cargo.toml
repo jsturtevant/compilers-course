@@ -1,0 +1,12 @@
+[package]
+name = "codegen"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "coolc"
+path = "src/main.rs"
+
+[dependencies]
+wasm-encoder = "0.245.1"
+ir = { path = "../ir" }

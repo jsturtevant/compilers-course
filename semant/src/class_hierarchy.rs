@@ -343,6 +343,34 @@ impl ClassHierarchy {
         }
         None
     }
+
+    /// Get all methods for a class including inherited ones
+    pub fn get_all_methods(&self, class_name: &str) -> Vec<(String, MethodSignature)> {
+        let mut methods = HashMap::new();
+        let mut current = class_name;
+        
+        // Walk up the inheritance chain collecting methods
+        let mut ancestors = Vec::new();
+        while let Some(class_info) = self.classes.get(current) {
+            ancestors.push(current);
+            if let Some(ref parent) = class_info.parent {
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        
+        // Add methods from parent to child (so child can override)
+        for ancestor in ancestors.iter().rev() {
+            if let Some(class_info) = self.classes.get(*ancestor) {
+                for (method_name, method_sig) in &class_info.methods {
+                    methods.insert(method_name.clone(), method_sig.clone());
+                }
+            }
+        }
+        
+        methods.into_iter().collect()
+    }
 }
 
 impl Default for ClassHierarchy {

@@ -39,6 +39,10 @@ impl SemanticAnalyzer {
         }
     }
 
+    pub fn class_hierarchy(&self) -> &ClassHierarchy {
+        &self.class_hierarchy
+    }
+
     pub fn analyze(&mut self, program: &Program) -> Result<(), Vec<SemanticError>> {
         let mut errors = Vec::new();
 
