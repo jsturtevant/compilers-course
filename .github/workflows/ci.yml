@@ -167,6 +167,10 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
+    - name: Install wasm-tools
+      run: cargo install wasm-tools --locked
+      shell: bash
+    
     - name: Install wasmtime (Unix)
       if: runner.os != 'Windows'
       run: |
