@@ -35,10 +35,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_program(&mut self, program: &Program) -> Result<HirProgram, String> {
         // Assign class tags (unique integers for runtime type checks)
-        let mut next_tag = 0;
-        for class in &program.classes {
+        for (next_tag, class) in program.classes.iter().enumerate() {
             self.class_tags.insert(class.name.clone(), next_tag);
-            next_tag += 1;
         }
 
         // Build vtables for builtin classes first
@@ -128,9 +126,7 @@ impl<'a> Lowerer<'a> {
             let inherited_attrs = self.class_hierarchy.get_all_attributes(parent);
             for (attr_name, attr_type) in inherited_attrs {
                 // Don't overwrite if already defined in this class
-                if !self.var_types.contains_key(&attr_name) {
-                    self.var_types.insert(attr_name, attr_type);
-                }
+                self.var_types.entry(attr_name).or_insert(attr_type);
             }
         }
 

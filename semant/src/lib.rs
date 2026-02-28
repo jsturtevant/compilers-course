@@ -114,9 +114,10 @@ impl SemanticAnalyzer {
             // Add all attributes (including inherited) to symbol table
             let all_attributes = self.class_hierarchy.get_all_attributes(&class.name);
             for (attr_name, attr_type) in &all_attributes {
-                if let Err(_) = self
+                if self
                     .symbol_table
                     .add_variable(attr_name.clone(), attr_type.clone())
+                    .is_err()
                 {
                     errors.push(SemanticError::RedefinedAttribute {
                         class: class.name.clone(),
@@ -134,9 +135,10 @@ impl SemanticAnalyzer {
 
                         // Add parameters to symbol table
                         for formal in &m.formals {
-                            if let Err(_) = self
+                            if self
                                 .symbol_table
                                 .add_variable(formal.name.clone(), formal.typ.clone())
+                                .is_err()
                             {
                                 errors.push(SemanticError::RedefinedAttribute {
                                     class: class.name.clone(),

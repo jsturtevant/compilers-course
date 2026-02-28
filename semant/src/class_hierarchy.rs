@@ -114,12 +114,7 @@ impl ClassHierarchy {
         // Check for duplicate class definitions
         let mut seen = HashSet::new();
         for class in classes {
-            if self.classes.contains_key(&class.name) {
-                errors.push(SemanticError::DuplicateClass {
-                    name: class.name.clone(),
-                    line: 0,
-                });
-            } else if !seen.insert(class.name.clone()) {
+            if self.classes.contains_key(&class.name) || !seen.insert(class.name.clone()) {
                 errors.push(SemanticError::DuplicateClass {
                     name: class.name.clone(),
                     line: 0,
@@ -191,7 +186,7 @@ impl ClassHierarchy {
         let mut errors = Vec::new();
 
         // First check for undefined parent classes
-        for (_class_name, class_info) in &self.classes {
+        for class_info in self.classes.values() {
             if let Some(ref parent) = class_info.parent {
                 if !self.classes.contains_key(parent) {
                     errors.push(SemanticError::UndefinedType {
@@ -275,13 +270,9 @@ impl ClassHierarchy {
         let ancestors2 = self.get_ancestors(type2);
 
         // Find first common ancestor
-        for ancestor in ancestors1 {
-            if ancestors2.contains(&ancestor) {
-                return Some(ancestor);
-            }
-        }
-
-        None
+        ancestors1
+            .into_iter()
+            .find(|ancestor| ancestors2.contains(ancestor))
     }
 
     fn get_ancestors(&self, class_name: &str) -> Vec<String> {
@@ -351,18 +342,13 @@ impl ClassHierarchy {
     /// Get method information (including inherited methods)
     pub fn get_method(&self, class_name: &str, method_name: &str) -> Option<MethodSignature> {
         let mut current = class_name;
-        loop {
-            if let Some(class_info) = self.classes.get(current) {
-                if let Some(method_info) = class_info.methods.get(method_name) {
-                    return Some(method_info.clone());
-                }
-                if let Some(parent) = &class_info.parent {
-                    current = parent;
-                } else {
-                    break;
-                }
-            } else {
-                break;
+        while let Some(class_info) = self.classes.get(current) {
+            if let Some(method_info) = class_info.methods.get(method_name) {
+                return Some(method_info.clone());
+            }
+            match &class_info.parent {
+                Some(parent) => current = parent,
+                None => break,
             }
         }
         None
@@ -371,18 +357,13 @@ impl ClassHierarchy {
     /// Find which class defines a method (walking up inheritance chain)
     pub fn get_method_defining_class(&self, class_name: &str, method_name: &str) -> Option<String> {
         let mut current = class_name;
-        loop {
-            if let Some(class_info) = self.classes.get(current) {
-                if class_info.methods.contains_key(method_name) {
-                    return Some(current.to_string());
-                }
-                if let Some(parent) = &class_info.parent {
-                    current = parent;
-                } else {
-                    break;
-                }
-            } else {
-                break;
+        while let Some(class_info) = self.classes.get(current) {
+            if class_info.methods.contains_key(method_name) {
+                return Some(current.to_string());
+            }
+            match &class_info.parent {
+                Some(parent) => current = parent,
+                None => break,
             }
         }
         None

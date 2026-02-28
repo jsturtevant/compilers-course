@@ -150,7 +150,7 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
 
     // Collect all class names (builtins first, then user classes sorted by class_tag)
     // Builtin class tags: Object=0, IO=1, String=2, Int=3, Bool=4
-    let builtin_class_names = vec!["Object", "IO", "String", "Int", "Bool"];
+    let builtin_class_names = ["Object", "IO", "String", "Int", "Bool"];
     let mut all_class_names: Vec<(usize, &str)> = builtin_class_names
         .iter()
         .enumerate()
@@ -238,7 +238,7 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
 
     // Add type signatures and function declarations
     for func in &program.functions {
-        let params: Vec<ValType> = func.params.iter().map(|t| lir_type_to_wasm(t)).collect();
+        let params: Vec<ValType> = func.params.iter().map(lir_type_to_wasm).collect();
         let results: Vec<ValType> = match &func.return_type {
             LirType::Void => vec![],
             t => vec![lir_type_to_wasm(t)],

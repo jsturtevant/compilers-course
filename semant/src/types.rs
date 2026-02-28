@@ -1,5 +1,6 @@
 use crate::{ClassHierarchy, SemanticError, SymbolTable};
 use parser::ast::{Expr, Program};
+use std::fmt;
 
 /// Type represents a COOL type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,12 +17,14 @@ impl Type {
             _ => Type::Class(s.to_string()),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Class(name) => name.clone(),
-            Type::SelfType => "SELF_TYPE".to_string(),
-            Type::NoType => "_no_type".to_string(),
+            Type::Class(name) => write!(f, "{}", name),
+            Type::SelfType => write!(f, "SELF_TYPE"),
+            Type::NoType => write!(f, "_no_type"),
         }
     }
 }
@@ -180,14 +183,12 @@ impl TypeChecker {
                     matches!(&left_type, Type::Class(name) if basic_types.contains(&name.as_str()));
                 let right_is_basic = matches!(&right_type, Type::Class(name) if basic_types.contains(&name.as_str()));
 
-                if left_is_basic && right_is_basic {
-                    if left_type != right_type {
-                        return Err(SemanticError::TypeMismatch {
-                            expected: left_type.to_string(),
-                            found: right_type.to_string(),
-                            line: 0,
-                        });
-                    }
+                if left_is_basic && right_is_basic && left_type != right_type {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: left_type.to_string(),
+                        found: right_type.to_string(),
+                        line: 0,
+                    });
                 }
 
                 Ok(Type::Class("Bool".to_string()))
@@ -283,8 +284,9 @@ impl TypeChecker {
                     }
 
                     // Add variable to scope after checking init expression
-                    if let Err(_) =
-                        symbol_table.add_variable(binding.name.clone(), binding.typ.clone())
+                    if symbol_table
+                        .add_variable(binding.name.clone(), binding.typ.clone())
+                        .is_err()
                     {
                         symbol_table.pop_scope();
                         return Err(SemanticError::RedefinedAttribute {
@@ -314,8 +316,9 @@ impl TypeChecker {
                     symbol_table.push_scope();
 
                     // Add the case variable to scope
-                    if let Err(_) =
-                        symbol_table.add_variable(branch.name.clone(), branch.typ.clone())
+                    if symbol_table
+                        .add_variable(branch.name.clone(), branch.typ.clone())
+                        .is_err()
                     {
                         symbol_table.pop_scope();
                         return Err(SemanticError::RedefinedAttribute {

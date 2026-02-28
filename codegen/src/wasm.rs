@@ -195,37 +195,37 @@ impl WasmModule {
     /// Assembles all sections into a complete WASM binary.
     pub fn finish(mut self) -> Vec<u8> {
         // Add sections in the correct order (per WASM spec)
-        if self.types.len() > 0 {
+        if !self.types.is_empty() {
             self.module.section(&self.types);
         }
-        if self.imports.len() > 0 {
+        if !self.imports.is_empty() {
             self.module.section(&self.imports);
         }
-        if self.functions.len() > 0 {
+        if !self.functions.is_empty() {
             self.module.section(&self.functions);
         }
-        if self.tables.len() > 0 {
+        if !self.tables.is_empty() {
             self.module.section(&self.tables);
         }
-        if self.memory.len() > 0 {
+        if !self.memory.is_empty() {
             self.module.section(&self.memory);
         }
-        if self.globals.len() > 0 {
+        if !self.globals.is_empty() {
             self.module.section(&self.globals);
         }
-        if self.exports.len() > 0 {
+        if !self.exports.is_empty() {
             self.module.section(&self.exports);
         }
         if let Some(ref start) = self.start {
             self.module.section(start);
         }
-        if self.elements.len() > 0 {
+        if !self.elements.is_empty() {
             self.module.section(&self.elements);
         }
-        if self.code.len() > 0 {
+        if !self.code.is_empty() {
             self.module.section(&self.code);
         }
-        if self.data.len() > 0 {
+        if !self.data.is_empty() {
             self.module.section(&self.data);
         }
 

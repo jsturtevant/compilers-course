@@ -48,7 +48,7 @@ pub enum Token {
                         '"' => result.push('"'),
                         '\n' => {
                             // Line continuation: skip whitespace on next line
-                            while chars.peek().map_or(false, |&c| c == ' ' || c == '\t') {
+                            while chars.peek().is_some_and(|&c| c == ' ' || c == '\t') {
                                 chars.next();
                             }
                         }

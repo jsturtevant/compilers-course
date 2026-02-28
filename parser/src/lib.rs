@@ -237,11 +237,9 @@ where
 
         // Logical not has low precedence - lower than comparison operators
         // so that "not x = y" parses as "not (x = y)" not "(not x) = y"
-        let logical_not = just(Token::Not)
+        just(Token::Not)
             .repeated()
-            .foldr(comparison, |_op, expr| ast::Expr::Not(Box::new(expr)));
-
-        logical_not
+            .foldr(comparison, |_op, expr| ast::Expr::Not(Box::new(expr)))
     });
 
     let formal = ident

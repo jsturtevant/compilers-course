@@ -243,7 +243,7 @@ where
             },
         );
 
-        let comparison = additive.clone().foldl(
+        additive.clone().foldl(
             choice((
                 just(Token::LessThan),
                 just(Token::LessThanOrEqual),
@@ -258,9 +258,7 @@ where
                 Token::Equal => ast::Expr::Eq(Box::new(lhs), Box::new(rhs)),
                 _ => unreachable!(),
             },
-        );
-
-        comparison
+        )
     });
 
     let formal = ident

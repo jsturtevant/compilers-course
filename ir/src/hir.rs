@@ -1,5 +1,4 @@
 /// High-level IR (HIR) - Typed AST with resolved types and method dispatch information
-
 /// Type ID representing a resolved COOL type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeId {
@@ -31,17 +30,19 @@ impl TypeId {
             _ => TypeId::Class(s.to_string()),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for TypeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypeId::Object => "Object".to_string(),
-            TypeId::IO => "IO".to_string(),
-            TypeId::String => "String".to_string(),
-            TypeId::Int => "Int".to_string(),
-            TypeId::Bool => "Bool".to_string(),
-            TypeId::Class(name) => name.clone(),
-            TypeId::SelfType(class) => format!("SELF_TYPE({})", class),
-            TypeId::NoType => "_no_type".to_string(),
+            TypeId::Object => write!(f, "Object"),
+            TypeId::IO => write!(f, "IO"),
+            TypeId::String => write!(f, "String"),
+            TypeId::Int => write!(f, "Int"),
+            TypeId::Bool => write!(f, "Bool"),
+            TypeId::Class(name) => write!(f, "{}", name),
+            TypeId::SelfType(class) => write!(f, "SELF_TYPE({})", class),
+            TypeId::NoType => write!(f, "_no_type"),
         }
     }
 }

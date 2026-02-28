@@ -1,5 +1,4 @@
 /// Low-level IR (LIR) - Linear WASM-like instructions ready for codegen
-
 /// LIR Program
 #[derive(Debug, Clone)]
 pub struct LirProgram {
