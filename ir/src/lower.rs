@@ -380,7 +380,9 @@ impl LoweringContext {
             let mut found = false;
             for (i, existing) in vtable.iter().enumerate() {
                 // Extract method name from "ClassName_methodName"
-                if let Some(existing_method_name) = existing.split('_').last() {
+                // Use find('_') to split on first underscore only (handles underscores in method names)
+                if let Some(underscore_pos) = existing.find('_') {
+                    let existing_method_name = &existing[underscore_pos + 1..];
                     if existing_method_name == method.name {
                         // Override parent's method
                         vtable[i] = func_name.clone();

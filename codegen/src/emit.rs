@@ -235,8 +235,14 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     }
 
     // Create vtables in memory and register their addresses
-    // Vtables start at 0x4000 (after string literals)
-    let mut vtable_offset = 0x4000u32;
+    // Vtables start after string literals, aligned to 256-byte boundary
+    // Re-calculate vtable_offset based on actual string data
+    let num_strings = program.string_data.len() as u32;
+    let strings_end = 0x2000u32 + num_strings * 128;
+    let mut vtable_offset = ((strings_end + 255) / 256) * 256;
+    if vtable_offset < 0x4000 {
+        vtable_offset = 0x4000; // Minimum address for vtables
+    }
     
     // First, create builtin vtables
     for (class_name, methods) in &builtin_vtables {
