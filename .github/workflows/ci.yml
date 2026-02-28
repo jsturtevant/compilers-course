@@ -7,12 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  lexer:
-    name: lexer on (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -37,16 +34,128 @@ jobs:
     
     - name: Check code formatting
       run: cargo fmt --all -- --check
-      working-directory: ./lexer
     
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
-      working-directory: ./lexer
     
-    - name: Build
+    - name: Build all crates
       run: cargo build --verbose
-      working-directory: ./lexer
     
-    - name: Run tests
+    - name: Run unit tests
       run: cargo test --verbose
-      working-directory: ./lexer
+
+  lexer-tests:
+    name: Lexer Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Run lexer on all samples
+      run: ./scripts/run-lexer-all.sh
+
+  parser-tests:
+    name: Parser Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Run parser on all samples
+      run: ./scripts/run-parser-all.sh
+
+  semant-tests:
+    name: Semantic Analysis Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Run semantic analysis on all samples
+      run: ./scripts/run-semant-all.sh
+
+  wasm-tests:
+    name: WASM Codegen Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Install wasmtime
+      run: |
+        curl https://wasmtime.dev/install.sh -sSf | bash
+        echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+    
+    - name: Run WASM codegen tests
+      run: ./scripts/run-codegen-all.sh
+    
+    - name: Run WASM execution tests
+      run: ./scripts/run-wasmtime-all.sh
