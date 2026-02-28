@@ -61,11 +61,6 @@ for cl_file in cool-support/examples/*.cl; do
     
     # Skip known unsupported programs before compilation
     case "$filename" in
-        atoi_test)
-            echo -e "${YELLOW}⏱${NC} $filename (multi-file - not supported)"
-            SKIPPED=$((SKIPPED + 1))
-            continue
-            ;;
         hairyscary)
             echo -e "${YELLOW}⏱${NC} $filename (circular init edge case - skipped)"
             SKIPPED=$((SKIPPED + 1))
@@ -73,15 +68,42 @@ for cl_file in cool-support/examples/*.cl; do
             ;;
     esac
     
-    # Compile to WASM
-    if ! cargo run -p codegen --quiet -- "$cl_file" -o "$wasm_file" 2>/dev/null; then
-        echo -e "${RED}✗${NC} $filename (compilation failed)"
-        FAILED=$((FAILED + 1))
-        continue
-    fi
+    # Handle multi-file compilation
+    case "$filename" in
+        atoi_test)
+            # atoi_test.cl depends on atoi.cl - compile both together
+            if ! cargo run -p codegen --quiet -- "$EXAMPLES_DIR/atoi.cl" "$cl_file" -o "$wasm_file" 2>/dev/null; then
+                echo -e "${RED}✗${NC} $filename (compilation failed)"
+                FAILED=$((FAILED + 1))
+                continue
+            fi
+            ;;
+        *)
+            # Single file compilation
+            if ! cargo run -p codegen --quiet -- "$cl_file" -o "$wasm_file" 2>/dev/null; then
+                echo -e "${RED}✗${NC} $filename (compilation failed)"
+                FAILED=$((FAILED + 1))
+                continue
+            fi
+            ;;
+    esac
     
     # Handle programs that need input
     case "$filename" in
+        atoi_test)
+            # atoi_test loops until "stop" - test with a number then stop
+            # Note: the program calls abort() on "stop" - that's expected behavior
+            exit_code=0
+            output=$(printf '12345\nstop\n' | timeout 3s wasmtime run "$wasm_file" 2>&1) || exit_code=$?
+            # Check for expected output (12345 converted and back) - abort is expected
+            if echo "$output" | grep -q "12345"; then
+                echo -e "${GREEN}✓${NC} $filename (multi-file) → 12345 converted correctly"
+                PASSED=$((PASSED + 1))
+            else
+                echo -e "${RED}✗${NC} $filename (unexpected output: ${output:0:80})"
+                FAILED=$((FAILED + 1))
+            fi
+            ;;
         palindrome)
             if run_with_input "$filename" "$wasm_file" "racecar" "palindrome"; then
                 PASSED=$((PASSED + 1))
