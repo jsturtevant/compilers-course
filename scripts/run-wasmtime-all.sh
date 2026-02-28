@@ -119,9 +119,17 @@ for cl_file in cool-support/examples/*.cl; do
             fi
             ;;
         life)
-            # Life is interactive - skip with note
-            echo -e "${YELLOW}⏱${NC} $filename (interactive game - skipped)"
-            SKIPPED=$((SKIPPED + 1))
+            # Life: choose pattern 1 (cross), run 1 generation, then exit
+            # Input: y (choose pattern), 1 (cross), n (don't continue), n (don't pick another)
+            exit_code=0
+            output=$(printf 'y\n1\nn\nn\n' | timeout 3s wasmtime run "$wasm_file" 2>&1) || exit_code=$?
+            if [ "$exit_code" -eq 0 ] && echo "$output" | grep -q "Game of Life"; then
+                echo -e "${GREEN}✓${NC} $filename (with test input) → Game of Life ran..."
+                PASSED=$((PASSED + 1))
+            else
+                echo -e "${RED}✗${NC} $filename (failed: exit=$exit_code)"
+                FAILED=$((FAILED + 1))
+            fi
             ;;
         primes)
             # Primes intentionally aborts after printing
