@@ -49,6 +49,8 @@ jobs:
         CARGO_BUILD_JOBS: 1
         # Force single codegen unit to avoid parallel PDB writes
         CARGO_PROFILE_DEV_CODEGEN_UNITS: 1
+        # Disable incremental compilation (causes PDB server issues)
+        CARGO_INCREMENTAL: 0
 
     - name: Build all crates (Unix)
       if: runner.os != 'Windows'
