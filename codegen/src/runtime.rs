@@ -142,8 +142,9 @@ fn add_alloc(module: &mut WasmModule) -> u32 {
 /// Object.abort() -> noreturn
 ///
 /// Terminates execution immediately.
+/// Returns i32 for WASM type consistency, though it never actually returns.
 fn add_object_abort(module: &mut WasmModule) -> u32 {
-    let type_idx = module.add_type(vec![ValType::I32], vec![]);
+    let type_idx = module.add_type(vec![ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
 
     let mut func = Function::new([]);

@@ -639,3 +639,93 @@ hexdump -C hello_world.wasm | grep "Hello"
 5. New/object allocation
 
 ---
+
+---
+
+## Control Flow Implementation (2026-02-28)
+
+### Task: Implement control flow expressions in codegen pipeline
+
+**Objective:** Enable if/while/let/block expressions to compile to valid WASM.
+
+### Implementation
+
+**1. Added Structured Control Flow LIR Instructions (ir/src/lir.rs)**
+- `IfElse { then_instrs, else_instrs, result_type }` — WASM-native if/else blocks
+- `WhileLoop { cond_instrs, body_instrs }` — WASM block/loop pattern
+- `BlockSeq { instrs }` — Sequence of instructions
+
+**2. Updated HIR→LIR Lowering (ir/src/lower.rs)**
+- Changed `If` lowering from label-based jumps to `IfElse` structured control
+- Changed `While` lowering from label-based to `WhileLoop` structured control
+- Fixed local variable indexing: locals now get indices after parameters
+- Removed unused label infrastructure (fresh_label, next_label_id)
+
+**3. Updated WASM Emission (codegen/src/emit.rs)**
+- `IfElse` emits: `if <block_type>` / then_instrs / `else` / else_instrs / `end`
+- `WhileLoop` emits: `block { loop { cond; i32.eqz; br_if 1; body; drop; br 0 } } i32.const 0`
+- `BlockSeq` emits instructions sequentially
+
+### WASM Control Flow Patterns
+
+**If Expression:**
+```wat
+;; stack: [condition]
+if (result i32)
+  ;; then branch
+else
+  ;; else branch
+end
+```
+
+**While Loop:**
+```wat
+block $exit
+  loop $continue
+    ;; condition
+    i32.eqz
+    br_if $exit        ;; break if condition false (depth 1)
+    ;; body
+    drop               ;; discard body result
+    br $continue       ;; continue loop (depth 0)
+  end
+end
+i32.const 0            ;; while returns void (0)
+```
+
+### Testing Results
+
+**Test Files Validated:**
+- ✅ `simple_if.cl` — if/then/else prints "true\n"
+- ✅ `simple_while.cl` — while loop with let binding loops 5 times
+- ✅ `nested.cl` — nested if/while works correctly
+- ✅ `block_test.cl` — block sequence {a; b; c} executes all
+- ✅ `nested_let.cl` — nested let expressions work
+- ✅ `primes.cl` — compiles and validates (no output due to attribute init not yet implemented)
+
+**Command Verified:**
+```bash
+cargo run --bin cool-wasm -- cool-support/examples/primes.cl -o /tmp/primes.wasm && wasm-tools validate /tmp/primes.wasm
+# SUCCESS
+```
+
+### Key Design Decisions
+
+1. **Structured control flow over labels:** WASM requires structured control flow. We emit `IfElse` and `WhileLoop` LIR instructions that directly map to WASM's `if/else/end` and `block/loop/br/end` patterns.
+
+2. **Local variable indexing:** Fixed bug where let-bound variables had wrong indices. Now properly offset by parameter count.
+
+3. **While returns void:** COOL while expressions return void, represented as `i32.const 0` in WASM.
+
+4. **If produces value:** Both branches must produce a value on the stack. Block type is `(result i32)` for non-void results.
+
+### Files Modified
+
+- `ir/src/lir.rs` — Added `IfElse`, `WhileLoop`, `BlockSeq` LIR instructions
+- `ir/src/lower.rs` — Changed if/while lowering to structured control flow
+- `codegen/src/emit.rs` — Added emission for new structured control flow instructions
+
+### Remaining Work
+
+- **Attribute initialization:** primes.cl doesn't print because attribute initializers aren't called during object construction
+- **IO.out_int:** Integer output not yet working (separate issue)

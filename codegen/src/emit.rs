@@ -220,6 +220,40 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
                 memory_index: 0,
             }));
             
+            // Initialize attributes with their default values
+            // Attribute offset starts at 12 (after header)
+            for (i, attr) in main_class.attributes.iter().enumerate() {
+                let attr_offset = 12 + (i * 4);
+                start_func.instruction(&Instruction::LocalGet(0));
+                
+                // Get default value based on type and initializer
+                let default_value = match &attr.init {
+                    Some(init_expr) => {
+                        // For simple literal initializers, extract the value
+                        match init_expr {
+                            ir::hir::HirExpr::IntLiteral { value, .. } => *value,
+                            ir::hir::HirExpr::BoolLiteral { value, .. } => if *value { 1 } else { 0 },
+                            _ => 0, // Default for complex expressions
+                        }
+                    }
+                    None => {
+                        // Default initialization based on type
+                        match &attr.typ {
+                            ir::hir::TypeId::Int => 0,
+                            ir::hir::TypeId::Bool => 0, // false
+                            _ => 0, // null pointer for objects
+                        }
+                    }
+                };
+                
+                start_func.instruction(&Instruction::I32Const(default_value));
+                start_func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+                    offset: attr_offset as u64,
+                    align: 2,
+                    memory_index: 0,
+                }));
+            }
+            
             // Call Main.main() with the object pointer - it returns SELF_TYPE (i32 pointer)
             start_func.instruction(&Instruction::LocalGet(0));
             start_func.instruction(&Instruction::Call(main_idx));
@@ -412,6 +446,67 @@ fn emit_instruction(func: &mut Function, ctx: &EmitContext, instr: &LirInstr) ->
 
         LirInstr::BrIf(depth) => {
             func.instruction(&Instruction::BrIf(*depth));
+        }
+
+        // Structured control flow
+        LirInstr::IfElse { then_instrs, else_instrs, result_type } => {
+            // WASM if/else block
+            let block_type = match result_type {
+                Some(LirType::I32) => wasm_encoder::BlockType::Result(ValType::I32),
+                Some(LirType::I64) => wasm_encoder::BlockType::Result(ValType::I64),
+                Some(LirType::Void) | None => wasm_encoder::BlockType::Empty,
+            };
+            
+            func.instruction(&Instruction::If(block_type));
+            for instr in then_instrs {
+                emit_instruction(func, ctx, instr)?;
+            }
+            func.instruction(&Instruction::Else);
+            for instr in else_instrs {
+                emit_instruction(func, ctx, instr)?;
+            }
+            func.instruction(&Instruction::End);
+        }
+
+        LirInstr::WhileLoop { cond_instrs, body_instrs } => {
+            // WASM while pattern: block { loop { cond; i32.eqz; br_if 1; body; drop; br 0 } } i32.const 0
+            // Outer block (for breaking out of the loop)
+            func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+            // Inner loop (for continuing the loop)
+            func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+            
+            // Evaluate condition
+            for instr in cond_instrs {
+                emit_instruction(func, ctx, instr)?;
+            }
+            
+            // Branch out of loop if condition is false (i.e., condition == 0)
+            func.instruction(&Instruction::I32Eqz);
+            func.instruction(&Instruction::BrIf(1)); // Break out of block (depth 1)
+            
+            // Loop body
+            for instr in body_instrs {
+                emit_instruction(func, ctx, instr)?;
+            }
+            func.instruction(&Instruction::Drop); // Discard body result
+            
+            // Branch back to loop start
+            func.instruction(&Instruction::Br(0)); // Continue loop (depth 0)
+            
+            // End loop
+            func.instruction(&Instruction::End);
+            // End block
+            func.instruction(&Instruction::End);
+            
+            // While always returns void object (represented as 0)
+            func.instruction(&Instruction::I32Const(0));
+        }
+
+        LirInstr::BlockSeq { instrs } => {
+            // Execute sequence of instructions, last value remains on stack
+            for instr in instrs {
+                emit_instruction(func, ctx, instr)?;
+            }
         }
 
         LirInstr::Call(name) => {

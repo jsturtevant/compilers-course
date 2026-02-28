@@ -6,26 +6,24 @@ use std::collections::HashMap;
 /// Lowering context for HIR -> LIR transformation
 pub struct LoweringContext {
     next_local_id: u32,
-    next_label_id: usize,
     /// Map from variable name to local index
     locals: HashMap<String, u32>,
     /// Track all locals for function signature
     local_types: Vec<LirType>,
     /// String literals collected during lowering
     string_literals: Vec<String>,
-    /// Next string data offset
-    next_string_offset: u32,
+    /// Attribute offsets for the current class (name -> byte offset from object start)
+    attribute_offsets: HashMap<String, u32>,
 }
 
 impl LoweringContext {
     pub fn new() -> Self {
         LoweringContext {
             next_local_id: 0,
-            next_label_id: 0,
             locals: HashMap::new(),
             local_types: Vec::new(),
             string_literals: Vec::new(),
-            next_string_offset: 0x2000, // Start strings at 8KB
+            attribute_offsets: HashMap::new(),
         }
     }
 
@@ -49,18 +47,23 @@ impl LoweringContext {
         self.locals.get(name).copied()
     }
 
-    /// Generate a fresh label
-    fn fresh_label(&mut self, prefix: &str) -> Label {
-        let id = self.next_label_id;
-        self.next_label_id += 1;
-        Label::fresh(prefix, id)
-    }
-
     /// Reset context for a new function
     fn reset(&mut self) {
         self.next_local_id = 0;
         self.locals.clear();
         self.local_types.clear();
+        // Don't clear attribute_offsets - they persist for the whole class
+    }
+    
+    /// Set up attribute offsets for a class
+    fn setup_attributes(&mut self, class: &HirClass) {
+        self.attribute_offsets.clear();
+        // Object header is 12 bytes (class_tag: 4, size: 4, vtable_ptr: 4)
+        let mut offset = 12u32;
+        for attr in &class.attributes {
+            self.attribute_offsets.insert(attr.name.clone(), offset);
+            offset += 4; // Each attribute is 4 bytes (i32 pointer)
+        }
     }
 
     /// Lower a HIR program to LIR
@@ -73,6 +76,9 @@ impl LoweringContext {
             // Generate vtable for this class
             let vtable = self.lower_vtable(class);
             vtables.push(vtable);
+            
+            // Set up attribute offsets for this class
+            self.setup_attributes(class);
 
             // Lower each method to a function
             for method in &class.methods {
@@ -139,10 +145,12 @@ impl LoweringContext {
         // Lower method body
         let body = self.lower_expr(&method.body);
 
-        // Build locals list from tracked types
+        // Build locals list for additional locals (beyond parameters)
+        // Each local in local_types was added with the correct index already stored
+        let param_count = params.len();
         let locals = self.local_types.iter().enumerate()
             .map(|(i, typ)| LirLocal {
-                index: i as u32,
+                index: (param_count + i) as u32,
                 typ: typ.clone(),
             })
             .collect();
@@ -183,6 +191,14 @@ impl LoweringContext {
                 // Variable reference
                 if let Some(local_id) = self.get_local(name) {
                     vec![LirInstr::LocalGet(local_id)]
+                } else if let Some(&attr_offset) = self.attribute_offsets.get(name) {
+                    // Attribute access: load from self at the attribute offset
+                    // self is always local 0
+                    vec![
+                        LirInstr::comment(format!("Load attribute: {}", name)),
+                        LirInstr::LocalGet(0), // self pointer
+                        LirInstr::I32Load { offset: attr_offset, align: 4 },
+                    ]
                 } else {
                     vec![
                         LirInstr::comment(format!("Unknown variable: {}", name)),
@@ -198,10 +214,21 @@ impl LoweringContext {
                 // Store to local (or attribute if not local)
                 if let Some(local_id) = self.get_local(name) {
                     instrs.push(LirInstr::LocalTee(local_id));
-                } else {
+                } else if let Some(&attr_offset) = self.attribute_offsets.get(name) {
                     // Attribute assignment: self.name := expr
-                    // TODO: Calculate attribute offset and store to memory
-                    instrs.push(LirInstr::comment(format!("Assign to attribute: {}", name)));
+                    // Need to store to memory at self + attr_offset
+                    // Stack has: [value]
+                    // We need: self, value on stack for i32.store
+                    // But we also need to return the value, so we use a temp local
+                    let temp = self.alloc_local(LirType::I32);
+                    instrs.push(LirInstr::LocalTee(temp)); // Save value, keep copy on stack
+                    instrs.push(LirInstr::Drop); // Drop the copy (we'll reload after store)
+                    instrs.push(LirInstr::LocalGet(0)); // self pointer
+                    instrs.push(LirInstr::LocalGet(temp)); // value
+                    instrs.push(LirInstr::I32Store { offset: attr_offset, align: 4 });
+                    instrs.push(LirInstr::LocalGet(temp)); // Return the stored value
+                } else {
+                    instrs.push(LirInstr::comment(format!("Unknown assign target: {}", name)));
                 }
                 instrs
             }
@@ -298,56 +325,36 @@ impl LoweringContext {
             }
 
             HirExpr::If { cond, then_branch, else_branch, .. } => {
+                // Use structured if/else for WASM compatibility
                 let mut instrs = Vec::new();
-                let else_label = self.fresh_label("else");
-                let end_label = self.fresh_label("endif");
 
                 // Evaluate condition
                 instrs.extend(self.lower_expr(cond));
                 
-                // Jump to else if false
-                instrs.push(LirInstr::I32Eqz);
-                instrs.push(LirInstr::JumpIf(else_label.clone()));
+                // Then and else branches lowered separately
+                let then_instrs = self.lower_expr(then_branch);
+                let else_instrs = self.lower_expr(else_branch);
                 
-                // Then branch
-                instrs.extend(self.lower_expr(then_branch));
-                instrs.push(LirInstr::Jump(end_label.clone()));
+                // WASM if/else always produces i32 (object pointer)
+                instrs.push(LirInstr::IfElse {
+                    then_instrs,
+                    else_instrs,
+                    result_type: Some(LirType::I32),
+                });
                 
-                // Else branch
-                instrs.push(LirInstr::Label(else_label));
-                instrs.extend(self.lower_expr(else_branch));
-                
-                // End
-                instrs.push(LirInstr::Label(end_label));
                 instrs
             }
 
             HirExpr::While { cond, body, .. } => {
-                let mut instrs = Vec::new();
-                let loop_label = self.fresh_label("loop");
-                let end_label = self.fresh_label("endloop");
-
-                // Loop start
-                instrs.push(LirInstr::Label(loop_label.clone()));
+                // Use structured while loop for WASM compatibility
+                // WASM pattern: block { loop { cond; br_if 1; body; br 0 } } i32.const 0
+                let cond_instrs = self.lower_expr(cond);
+                let body_instrs = self.lower_expr(body);
                 
-                // Evaluate condition
-                instrs.extend(self.lower_expr(cond));
-                
-                // Exit if false
-                instrs.push(LirInstr::I32Eqz);
-                instrs.push(LirInstr::JumpIf(end_label.clone()));
-                
-                // Loop body
-                instrs.extend(self.lower_expr(body));
-                instrs.push(LirInstr::Drop); // Discard body result
-                
-                // Jump back to loop start
-                instrs.push(LirInstr::Jump(loop_label));
-                
-                // End (while always returns void/0)
-                instrs.push(LirInstr::Label(end_label));
-                instrs.push(LirInstr::I32Const(0));
-                instrs
+                vec![LirInstr::WhileLoop {
+                    cond_instrs,
+                    body_instrs,
+                }]
             }
 
             HirExpr::Let { name, init, body, .. } => {

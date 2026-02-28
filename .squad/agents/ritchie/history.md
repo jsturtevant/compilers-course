@@ -280,3 +280,74 @@ Each phase is a standalone executable that reads/writes text formats via stdin/s
 **Result:** End-to-end compilation now works! COOL source → parse → semant → HIR → LIR → WASM → execution with actual output.
 
 ---
+
+### Integer Arithmetic and Boolean Operations — 2025-01-03
+
+**Status:** Complete — arith.cl now compiles and produces valid WASM that runs correctly.
+
+**Implemented Features:**
+
+1. **Integer Arithmetic Operations:**
+   - Addition (`+`), Subtraction (`-`), Multiplication (`*`), Division (`/`)
+   - All operations use WASM i32 instructions: `i32.add`, `i32.sub`, `i32.mul`, `i32.div_s`
+
+2. **Comparison Operations:**
+   - Less than (`<`), Less than or equal (`<=`), Equality (`=`)
+   - Implemented via `i32.lt_s`, `i32.le_s`, `i32.eq` WASM instructions
+
+3. **Negation:**
+   - Integer negation (`~x`) → lowered to `0 - x` using `i32.const 0` + `i32.sub`
+
+4. **Boolean Operations:**
+   - Logical not (`not x`) → `i32.eqz` (equals zero)
+   - Boolean literals: `true` → 1, `false` → 0
+
+5. **Symbol Table / Type Tracking:**
+   - Added `var_types` HashMap to Lowerer to track variable types
+   - Tracks: formal parameters, let-bound variables, case branch bindings, class attributes
+   - Enables proper method dispatch resolution based on expression types
+
+6. **Attribute Access:**
+   - Added `attribute_offsets` HashMap to LoweringContext
+   - Object header: 12 bytes (class_tag, size, vtable_ptr)
+   - Attributes stored at offsets 12, 16, 20, ... (4 bytes each)
+   - Variable references check locals first, then attributes
+   - Attribute assignment uses `self` pointer + offset for i32.store
+
+7. **Method Dispatch Resolution:**
+   - Added `get_method_defining_class()` to ClassHierarchy
+   - Correctly resolves inherited methods (e.g., `Object.abort`, `String.concat`)
+   - Dispatch return types now propagated from method signatures
+   - Fixed case branch variable scoping
+
+8. **Object Initialization:**
+   - `_start` now initializes Main object attributes with their default values
+   - Boolean `true` initializers properly set to 1
+   - Ensures `flag : Bool <- true` works correctly for loop conditions
+
+9. **Runtime Fix:**
+   - `Object_abort` now returns i32 for WASM type consistency (unreachable never returns, but type must match)
+
+**Files Modified:**
+- `semant/src/class_hierarchy.rs` — Added `get_method_defining_class()`
+- `ir/src/ast_to_hir.rs` — Symbol table, type tracking, dispatch resolution
+- `ir/src/lower.rs` — Attribute offsets, attribute load/store instructions
+- `codegen/src/emit.rs` — Attribute initialization in `_start`
+- `codegen/src/runtime.rs` — Fixed `Object_abort` return type
+
+**Validation:**
+- arith.cl compiles to valid WASM: `wasm-tools validate` passes
+- Program runs with wasmtime and produces expected menu-driven output
+- 17/18 sample programs compile successfully (1 fails due to missing A2I dependency)
+
+**Test Command:**
+```bash
+cargo run --bin cool-wasm -- cool-support/examples/arith.cl -o /tmp/arith.wasm && wasm-tools validate /tmp/arith.wasm
+```
+
+**Validation Script:**
+```bash
+./scripts/validate-wasm.sh  # Validates all samples
+```
+
+---

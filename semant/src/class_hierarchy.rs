@@ -349,6 +349,26 @@ impl ClassHierarchy {
         }
         None
     }
+    
+    /// Find which class defines a method (walking up inheritance chain)
+    pub fn get_method_defining_class(&self, class_name: &str, method_name: &str) -> Option<String> {
+        let mut current = class_name;
+        loop {
+            if let Some(class_info) = self.classes.get(current) {
+                if class_info.methods.contains_key(method_name) {
+                    return Some(current.to_string());
+                }
+                if let Some(parent) = &class_info.parent {
+                    current = parent;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        None
+    }
 
     /// Get all methods for a class including inherited ones
     pub fn get_all_methods(&self, class_name: &str) -> Vec<(String, MethodSignature)> {

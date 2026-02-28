@@ -20,6 +20,8 @@ struct Lowerer<'a> {
     /// Maps (class_name, method_name) -> defining_class_name
     method_owners: HashMap<(String, String), String>,
     current_class: Option<String>,
+    /// Symbol table: maps variable name -> type name
+    var_types: HashMap<String, String>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -30,6 +32,7 @@ impl<'a> Lowerer<'a> {
             vtables: HashMap::new(),
             method_owners: HashMap::new(),
             current_class: None,
+            var_types: HashMap::new(),
         }
     }
 
@@ -58,7 +61,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn build_vtable_and_owners(&mut self, class_name: &str, class: &Class) {
+    fn build_vtable_and_owners(&mut self, class_name: &str, _class: &Class) {
         let mut vtable = Vec::new();
         
         // Get all methods (including inherited) in order
@@ -66,8 +69,10 @@ impl<'a> Lowerer<'a> {
         for (method_name, _sig) in methods {
             vtable.push(method_name.clone());
             
-            // Determine which class defines this method
-            let defining_class = self.find_method_owner(class_name, &method_name, class);
+            // Use class_hierarchy to find which class defines this method
+            let defining_class = self.class_hierarchy
+                .get_method_defining_class(class_name, &method_name)
+                .unwrap_or_else(|| class_name.to_string());
             self.method_owners.insert(
                 (class_name.to_string(), method_name),
                 defining_class
@@ -75,34 +80,6 @@ impl<'a> Lowerer<'a> {
         }
 
         self.vtables.insert(class_name.to_string(), vtable);
-    }
-    
-    fn find_method_owner(&self, class_name: &str, method_name: &str, class: &Class) -> String {
-        // Check if this class defines the method
-        for feature in &class.features {
-            if let Feature::Method(m) = feature {
-                if m.name == method_name {
-                    return class_name.to_string();
-                }
-            }
-        }
-        
-        // Walk up inheritance chain to find which class defines it
-        let mut current = class.parent.clone();
-        while let Some(parent_name) = current {
-            // Use class_hierarchy to check if this parent defines the method
-            if let Some(parent_info) = self.class_hierarchy.get_class(&parent_name) {
-                if parent_info.methods.contains_key(method_name) {
-                    return parent_name.clone();
-                }
-            }
-            
-            // Try next parent
-            current = self.class_hierarchy.get_parent(&parent_name);
-        }
-        
-        // Default to current class if we can't find it
-        class_name.to_string()
     }
 
     fn get_vtable_index(&self, class_name: &str, method_name: &str) -> usize {
@@ -114,6 +91,25 @@ impl<'a> Lowerer<'a> {
 
     fn lower_class(&mut self, class: &Class) -> Result<HirClass, String> {
         self.current_class = Some(class.name.clone());
+        
+        // Clear and populate var_types with class attributes
+        self.var_types.clear();
+        for feature in &class.features {
+            if let Feature::Attribute(attr) = feature {
+                self.var_types.insert(attr.name.clone(), attr.attr_type.clone());
+            }
+        }
+        
+        // Also add inherited attributes from parent classes
+        if let Some(ref parent) = class.parent {
+            let inherited_attrs = self.class_hierarchy.get_all_attributes(parent);
+            for (attr_name, attr_type) in inherited_attrs {
+                // Don't overwrite if already defined in this class
+                if !self.var_types.contains_key(&attr_name) {
+                    self.var_types.insert(attr_name, attr_type);
+                }
+            }
+        }
 
         let class_tag = *self.class_tags.get(&class.name).unwrap_or(&0);
 
@@ -161,6 +157,14 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_method(&mut self, method: &ast::MethodFeature, vtable_index: usize) -> Result<HirMethod, String> {
+        // Save current var_types (which contains class attributes)
+        let saved_var_types = self.var_types.clone();
+        
+        // Add formal parameters to symbol table (can shadow attributes)
+        for f in &method.formals {
+            self.var_types.insert(f.name.clone(), f.typ.clone());
+        }
+        
         let formals = method
             .formals
             .iter()
@@ -172,6 +176,9 @@ impl<'a> Lowerer<'a> {
 
         let return_type = TypeId::from_string(&method.return_type, self.current_class.as_deref());
         let body = self.lower_expr(&method.body)?;
+        
+        // Restore var_types
+        self.var_types = saved_var_types;
 
         Ok(HirMethod {
             name: method.name.clone(),
@@ -213,9 +220,11 @@ impl<'a> Lowerer<'a> {
                     } else {
                         TypeId::NoType
                     }
+                } else if let Some(type_name) = self.var_types.get(name) {
+                    // Look up variable type from symbol table
+                    TypeId::from_string(type_name, self.current_class.as_deref())
                 } else {
-                    // In production, we'd look this up in the symbol table
-                    // For now, use NoType as placeholder
+                    // Unknown variable - might be an attribute
                     TypeId::NoType
                 };
                 
@@ -376,11 +385,30 @@ impl<'a> Lowerer<'a> {
                     return self.lower_expr(body);
                 }
 
-                // Process bindings from left to right, creating nested Let expressions
-                let mut result = self.lower_expr(body)?;
-                let result_type = result.get_type().clone();
+                // Add all bindings to symbol table first (for body to see)
+                let mut old_bindings = Vec::new();
+                for binding in bindings {
+                    // Save old binding if any
+                    let old = self.var_types.get(&binding.name).cloned();
+                    old_bindings.push((binding.name.clone(), old));
+                    self.var_types.insert(binding.name.clone(), binding.typ.clone());
+                }
                 
-                // Work backwards through bindings to create nested structure
+                // Now lower body with all bindings visible
+                let result_body = self.lower_expr(body)?;
+                let result_type = result_body.get_type().clone();
+                
+                // Restore old bindings
+                for (name, old) in old_bindings.iter().rev() {
+                    if let Some(old_typ) = old {
+                        self.var_types.insert(name.clone(), old_typ.clone());
+                    } else {
+                        self.var_types.remove(name);
+                    }
+                }
+                
+                // Build nested Let structure working backwards
+                let mut result = result_body;
                 for binding in bindings.iter().rev() {
                     let current_class_copy = self.current_class.clone();
                     let typ = TypeId::from_string(&binding.typ, current_class_copy.as_deref());
@@ -414,7 +442,19 @@ impl<'a> Lowerer<'a> {
                 let mut hir_branches = Vec::new();
                 
                 for branch in branches {
+                    // Add case branch variable to symbol table
+                    let old_binding = self.var_types.get(&branch.name).cloned();
+                    self.var_types.insert(branch.name.clone(), branch.typ.clone());
+                    
                     let branch_expr = self.lower_expr(&branch.expr)?;
+                    
+                    // Restore old binding
+                    if let Some(old_typ) = old_binding {
+                        self.var_types.insert(branch.name.clone(), old_typ);
+                    } else {
+                        self.var_types.remove(&branch.name);
+                    }
+                    
                     hir_branches.push(CaseBranch {
                         name: branch.name.clone(),
                         type_name: branch.typ.clone(),
@@ -448,13 +488,19 @@ impl<'a> Lowerer<'a> {
 
                 if let Some(ref static_class) = static_type {
                     // Static dispatch: expr@Type.method(args)
-                    let method_index = self.get_vtable_index(static_class, method);
                     
                     // Find which class actually defines this method
-                    let defining_class = self.method_owners
-                        .get(&(static_class.clone(), method.clone()))
-                        .cloned()
+                    let defining_class = self.class_hierarchy
+                        .get_method_defining_class(static_class, method)
                         .unwrap_or_else(|| static_class.clone());
+                    
+                    let method_index = self.get_vtable_index(&defining_class, method);
+                    
+                    // Get return type from method signature
+                    let return_type = self.class_hierarchy
+                        .get_method(&defining_class, method)
+                        .map(|sig| TypeId::from_string(&sig.return_type, Some(&defining_class)))
+                        .unwrap_or(TypeId::NoType);
                     
                     Ok(HirExpr::StaticDispatch {
                         object,
@@ -465,23 +511,42 @@ impl<'a> Lowerer<'a> {
                             method_index,
                         },
                         args: hir_args,
-                        typ: TypeId::NoType, // Would be resolved by type checker
+                        typ: return_type,
                     })
                 } else {
                     // Dynamic dispatch: expr.method(args)
                     let class_name = match &object_type {
                         TypeId::Class(name) => name.clone(),
                         TypeId::SelfType(name) => name.clone(),
-                        _ => "Object".to_string(),
+                        TypeId::Object => "Object".to_string(),
+                        TypeId::IO => "IO".to_string(),
+                        TypeId::String => "String".to_string(),
+                        TypeId::Int => "Int".to_string(),
+                        TypeId::Bool => "Bool".to_string(),
+                        TypeId::NoType => {
+                            // Type unknown, use current class context as best guess
+                            self.current_class.clone().unwrap_or_else(|| "Object".to_string())
+                        }
                     };
                     
-                    let method_index = self.get_vtable_index(&class_name, method);
-                    
                     // Find which class actually defines this method
-                    let defining_class = self.method_owners
-                        .get(&(class_name.clone(), method.clone()))
-                        .cloned()
-                        .unwrap_or(class_name.clone());
+                    // First try the object's class, then walk up inheritance chain
+                    let defining_class = self.class_hierarchy
+                        .get_method_defining_class(&class_name, method)
+                        .unwrap_or_else(|| {
+                            // Method not found in class_name's hierarchy
+                            // This might be because of incomplete type info
+                            // Default to the class_name itself
+                            class_name.clone()
+                        });
+                    
+                    let method_index = self.get_vtable_index(&defining_class, method);
+                    
+                    // Get return type from method signature
+                    let return_type = self.class_hierarchy
+                        .get_method(&defining_class, method)
+                        .map(|sig| TypeId::from_string(&sig.return_type, Some(&defining_class)))
+                        .unwrap_or(TypeId::NoType);
                     
                     Ok(HirExpr::Dispatch {
                         object,
@@ -491,7 +556,7 @@ impl<'a> Lowerer<'a> {
                             method_index,
                         },
                         args: hir_args,
-                        typ: TypeId::NoType, // Would be resolved by type checker
+                        typ: return_type,
                     })
                 }
             },
@@ -515,13 +580,19 @@ impl<'a> Lowerer<'a> {
                 }
 
                 let class_name = current_class_copy.clone().unwrap_or_else(|| "Object".to_string());
-                let method_index = self.get_vtable_index(&class_name, name);
                 
                 // Find which class actually defines this method
-                let defining_class = self.method_owners
-                    .get(&(class_name.clone(), name.clone()))
-                    .cloned()
-                    .unwrap_or(class_name.clone());
+                let defining_class = self.class_hierarchy
+                    .get_method_defining_class(&class_name, name)
+                    .unwrap_or_else(|| class_name.clone());
+                    
+                let method_index = self.get_vtable_index(&defining_class, name);
+                
+                // Get return type from method signature
+                let return_type = self.class_hierarchy
+                    .get_method(&defining_class, name)
+                    .map(|sig| TypeId::from_string(&sig.return_type, Some(&defining_class)))
+                    .unwrap_or(TypeId::NoType);
 
                 Ok(HirExpr::Dispatch {
                     object: self_expr,
@@ -531,7 +602,7 @@ impl<'a> Lowerer<'a> {
                         method_index,
                     },
                     args: hir_args,
-                    typ: TypeId::NoType,
+                    typ: return_type,
                 })
             },
 

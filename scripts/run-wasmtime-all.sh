@@ -42,9 +42,10 @@ for cl_file in cool-support/examples/*.cl; do
     
     # Try to run with wasmtime (with timeout)
     # Note: Many programs need input or have infinite loops, so we timeout after 2 seconds
+    exit_code=0
     output=$(timeout 2s wasmtime run "$wasm_file" 2>&1) || exit_code=$?
     
-    if [ -z "${exit_code:-}" ] || [ "$exit_code" -eq 0 ]; then
+    if [ "$exit_code" -eq 0 ]; then
         # Success - check if there's any output
         if [ -n "$output" ]; then
             echo -e "${GREEN}✓${NC} $filename → output: ${output:0:50}..."

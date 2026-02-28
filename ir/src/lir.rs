@@ -162,6 +162,27 @@ pub enum LirInstr {
     /// Branch if non-zero (WASM br_if)
     BrIf(u32),
 
+    // Structured control flow (WASM-native)
+    /// If-then-else expression
+    /// Stack: [cond] then executes then_instrs or else_instrs, leaves result on stack
+    IfElse {
+        then_instrs: Vec<LirInstr>,
+        else_instrs: Vec<LirInstr>,
+        result_type: Option<LirType>,
+    },
+
+    /// While loop (WASM block/loop pattern)
+    /// Stack: [] -> [void_obj]
+    WhileLoop {
+        cond_instrs: Vec<LirInstr>,
+        body_instrs: Vec<LirInstr>,
+    },
+
+    /// Block sequence (executes instrs, result of last remains on stack)
+    BlockSeq {
+        instrs: Vec<LirInstr>,
+    },
+
     // Function calls
     /// Direct function call
     Call(String),
