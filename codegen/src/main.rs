@@ -2,6 +2,7 @@
 //!
 //! Command-line interface for compiling COOL programs to WebAssembly.
 //! Supports multi-file compilation by merging classes from multiple .cl files.
+//! Can output either core WASM modules or WASM components.
 
 use codegen::compile_hir;
 use parser::Program;
@@ -17,22 +18,35 @@ fn main() {
     // Parse arguments: collect input files and output path
     let mut input_files: Vec<String> = Vec::new();
     let mut output_path: Option<String> = None;
+    let mut emit_component = false;
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "-o" {
-            if i + 1 < args.len() {
-                output_path = Some(args[i + 1].clone());
-                i += 2;
-            } else {
-                eprintln!("Error: -o requires an output path");
-                std::process::exit(1);
+        match args[i].as_str() {
+            "-o" => {
+                if i + 1 < args.len() {
+                    output_path = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: -o requires an output path");
+                    std::process::exit(1);
+                }
             }
-        } else if args[i].ends_with(".cl") {
-            input_files.push(args[i].clone());
-            i += 1;
-        } else {
-            eprintln!("Warning: ignoring unknown argument: {}", args[i]);
-            i += 1;
+            "--component" | "-c" => {
+                emit_component = true;
+                i += 1;
+            }
+            "--help" | "-h" => {
+                print_usage(&args[0]);
+                std::process::exit(0);
+            }
+            arg if arg.ends_with(".cl") => {
+                input_files.push(args[i].clone());
+                i += 1;
+            }
+            _ => {
+                eprintln!("Warning: ignoring unknown argument: {}", args[i]);
+                i += 1;
+            }
         }
     }
 
@@ -47,7 +61,8 @@ fn main() {
         input_files[0].replace(".cl", ".wasm")
     });
 
-    println!("Compiling {} file(s) to {}", input_files.len(), output_path);
+    let output_type = if emit_component { "component" } else { "module" };
+    println!("Compiling {} file(s) to {} ({})", input_files.len(), output_path, output_type);
 
     // Full compilation pipeline: Parser → Semant → AST-to-HIR → Codegen
     
@@ -103,8 +118,24 @@ fn main() {
     // 4. Compile HIR to WASM
     match compile_hir(&hir) {
         Ok(wasm_bytes) => {
+            // Optionally wrap as component
+            let final_bytes = if emit_component {
+                match encode_component(&wasm_bytes) {
+                    Ok(component_bytes) => {
+                        println!("  Wrapped as WASM component ({} bytes)", component_bytes.len());
+                        component_bytes
+                    }
+                    Err(e) => {
+                        eprintln!("Component encoding error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                wasm_bytes
+            };
+
             // Write output
-            if let Err(e) = std::fs::write(&output_path, wasm_bytes) {
+            if let Err(e) = std::fs::write(&output_path, final_bytes) {
                 eprintln!("Error writing output file: {}", e);
                 std::process::exit(1);
             }
@@ -117,16 +148,37 @@ fn main() {
     }
 }
 
+/// Encode a core WASM module as a WASM component
+fn encode_component(core_wasm: &[u8]) -> Result<Vec<u8>, String> {
+    use wit_component::ComponentEncoder;
+    use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_COMMAND_ADAPTER;
+    
+    // Create a component that wraps the core module with WASI adapter
+    let encoded = ComponentEncoder::default()
+        .module(core_wasm)
+        .map_err(|e| format!("Failed to set module: {}", e))?
+        .adapter("wasi_snapshot_preview1", WASI_SNAPSHOT_PREVIEW1_COMMAND_ADAPTER)
+        .map_err(|e| format!("Failed to add WASI adapter: {}", e))?
+        .validate(true)
+        .encode()
+        .map_err(|e| format!("Failed to encode component: {}", e))?;
+    
+    Ok(encoded)
+}
+
 fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} <input1.cl> [input2.cl ...] [-o <output.wasm>]", program_name);
+    eprintln!("Usage: {} <input1.cl> [input2.cl ...] [-o <output.wasm>] [--component]", program_name);
     eprintln!();
     eprintln!("Compile one or more COOL files to WebAssembly.");
     eprintln!("Classes from all input files are merged into a single program.");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  -o <output>    Specify output file (default: first input with .wasm extension)");
+    eprintln!("  -o <output>     Specify output file (default: first input with .wasm extension)");
+    eprintln!("  -c, --component Output a WASM component instead of a core module");
+    eprintln!("  -h, --help      Show this help message");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  {} hello.cl -o hello.wasm", program_name);
+    eprintln!("  {} hello.cl --component -o hello.wasm", program_name);
     eprintln!("  {} atoi.cl atoi_test.cl -o atoi_test.wasm", program_name);
 }

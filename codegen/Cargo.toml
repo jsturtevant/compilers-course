@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 wasm-encoder = "0.245.1"
+wit-component = "0.245.1"
+wasi-preview1-component-adapter-provider = "42.0.1"
 ir = { path = "../ir" }
 lexer = { path = "../lexer" }
 parser = { path = "../parser" }
