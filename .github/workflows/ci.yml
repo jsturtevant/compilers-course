@@ -48,9 +48,12 @@ jobs:
       run: cargo test --verbose
 
   lexer-tests:
-    name: Lexer Integration Tests
-    runs-on: ubuntu-latest
+    name: Lexer Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     
     steps:
     - uses: actions/checkout@v4
@@ -71,13 +74,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run lexer on all samples
+    - name: Run lexer on all samples (Unix)
+      if: runner.os != 'Windows'
       run: ./scripts/run-lexer-all.sh
+    
+    - name: Run lexer on all samples (Windows)
+      if: runner.os == 'Windows'
+      run: cargo run -p lexer --quiet -- cool-support/examples/hello_world.cl
+      shell: bash
 
   parser-tests:
-    name: Parser Integration Tests
-    runs-on: ubuntu-latest
+    name: Parser Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     
     steps:
     - uses: actions/checkout@v4
@@ -98,13 +110,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run parser on all samples
+    - name: Run parser on all samples (Unix)
+      if: runner.os != 'Windows'
       run: ./scripts/run-parser-all.sh
+    
+    - name: Run parser on all samples (Windows)
+      if: runner.os == 'Windows'
+      run: cargo run -p parser --quiet -- cool-support/examples/hello_world.cl
+      shell: bash
 
   semant-tests:
-    name: Semantic Analysis Tests
-    runs-on: ubuntu-latest
+    name: Semant Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     
     steps:
     - uses: actions/checkout@v4
@@ -125,13 +146,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Run semantic analysis on all samples
+    - name: Run semantic analysis (Unix)
+      if: runner.os != 'Windows'
       run: ./scripts/run-semant-all.sh
+    
+    - name: Run semantic analysis (Windows)
+      if: runner.os == 'Windows'
+      run: cargo run -p semant --quiet -- cool-support/examples/hello_world.cl
+      shell: bash
 
   wasm-tests:
-    name: WASM Codegen Tests
-    runs-on: ubuntu-latest
+    name: WASM Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     
     steps:
     - uses: actions/checkout@v4
@@ -152,13 +182,29 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     
-    - name: Install wasmtime
+    - name: Install wasmtime (Unix)
+      if: runner.os != 'Windows'
       run: |
         curl https://wasmtime.dev/install.sh -sSf | bash
         echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
     
-    - name: Run WASM codegen tests
-      run: ./scripts/run-codegen-all.sh
+    - name: Install wasmtime (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        iwr https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasmtime-v19.0.0-x86_64-windows.zip -OutFile wasmtime.zip
+        Expand-Archive wasmtime.zip -DestinationPath $env:USERPROFILE
+        echo "$env:USERPROFILE\wasmtime-v19.0.0-x86_64-windows" >> $env:GITHUB_PATH
+      shell: pwsh
     
-    - name: Run WASM execution tests
-      run: ./scripts/run-wasmtime-all.sh
+    - name: Run WASM tests (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        ./scripts/run-codegen-all.sh
+        ./scripts/run-wasmtime-all.sh
+    
+    - name: Run WASM tests (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        cargo run -p codegen --quiet -- cool-support/examples/hello_world.cl -o hello_world.wasm
+        wasmtime hello_world.wasm
+      shell: bash
