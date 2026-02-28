@@ -43,14 +43,8 @@ jobs:
     
     - name: Build all crates (Windows)
       if: runner.os == 'Windows'
-      run: cargo build --verbose
-      env:
-        # Avoid PDB server contention on Windows (LNK1318 errors)
-        CARGO_BUILD_JOBS: 1
-        # Force single codegen unit to avoid parallel PDB writes
-        CARGO_PROFILE_DEV_CODEGEN_UNITS: 1
-        # Disable incremental compilation (causes PDB server issues)
-        CARGO_INCREMENTAL: 0
+      # Release mode uses fewer codegen units and smaller PDBs, avoiding LNK1318
+      run: cargo build --release --verbose
 
     - name: Build all crates (Unix)
       if: runner.os != 'Windows'
