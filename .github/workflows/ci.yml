@@ -43,6 +43,9 @@ jobs:
     
     - name: Build all crates
       run: cargo build --verbose
+      env:
+        # Avoid PDB server contention on Windows (LNK1318 errors)
+        CARGO_BUILD_JOBS: ${{ runner.os == 'Windows' && '1' || '' }}
     
     - name: Run unit tests
       run: cargo test --verbose
