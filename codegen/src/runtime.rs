@@ -319,15 +319,165 @@ fn add_io_out_string(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
 /// IO.out_int(i: Int) -> IO
 ///
 /// Converts an integer to string and writes to stdout.
-/// Simplified implementation for MVP.
-fn add_io_out_int(module: &mut WasmModule, _wasi_fd_write: u32) -> u32 {
+fn add_io_out_int(module: &mut WasmModule, wasi_fd_write: u32) -> u32 {
+    use wasm_encoder::BlockType;
+    
     // (self: i32, i: i32) -> i32
     let type_idx = module.add_type(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
     let func_idx = module.add_function(type_idx);
 
-    // For MVP: just stub - return self
-    // TODO: Implement proper int to string conversion
-    let mut func = Function::new([]);
+    // Buffer for digits at 0x1200, with space for sign and up to 11 digits
+    // Locals: value (local 2), is_negative (local 3), idx (local 4), digit (local 5)
+    let mut func = Function::new([
+        (1, ValType::I32), // value
+        (1, ValType::I32), // is_negative  
+        (1, ValType::I32), // idx (write position in buffer)
+        (1, ValType::I32), // digit
+    ]);
+    
+    let buffer = 0x1200i32;
+    
+    // value = param 1
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::LocalSet(2));
+    
+    // Check if negative
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::I32LtS);
+    func.instruction(&Instruction::LocalSet(3)); // is_negative
+    
+    // If negative, negate value
+    func.instruction(&Instruction::LocalGet(3));
+    func.instruction(&Instruction::If(BlockType::Empty));
+    {
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalGet(2));
+        func.instruction(&Instruction::I32Sub);
+        func.instruction(&Instruction::LocalSet(2));
+    }
+    func.instruction(&Instruction::End);
+    
+    // Handle zero case specially
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Const(0));
+    func.instruction(&Instruction::I32Eq);
+    func.instruction(&Instruction::If(BlockType::Empty));
+    {
+        // Write '0' to buffer
+        func.instruction(&Instruction::I32Const(buffer));
+        func.instruction(&Instruction::I32Const(48)); // '0'
+        func.instruction(&Instruction::I32Store8(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::LocalSet(4)); // idx = 1
+    }
+    func.instruction(&Instruction::Else);
+    {
+        // Start at end of buffer and write digits backwards
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::LocalSet(4)); // idx = 0
+        
+        // Loop: while value > 0, write digit
+        func.instruction(&Instruction::Block(BlockType::Empty));
+        func.instruction(&Instruction::Loop(BlockType::Empty));
+        {
+            // if value == 0 then break
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Eqz);
+            func.instruction(&Instruction::BrIf(1));
+            
+            // digit = value % 10
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(10));
+            func.instruction(&Instruction::I32RemU);
+            func.instruction(&Instruction::LocalSet(5));
+            
+            // buffer[10 - idx] = '0' + digit (write backwards from position 10)
+            func.instruction(&Instruction::I32Const(buffer + 10));
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Sub);
+            func.instruction(&Instruction::LocalGet(5));
+            func.instruction(&Instruction::I32Const(48)); // '0'
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::I32Store8(wasm_encoder::MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            
+            // idx++
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalSet(4));
+            
+            // value = value / 10
+            func.instruction(&Instruction::LocalGet(2));
+            func.instruction(&Instruction::I32Const(10));
+            func.instruction(&Instruction::I32DivU);
+            func.instruction(&Instruction::LocalSet(2));
+            
+            func.instruction(&Instruction::Br(0));
+        }
+        func.instruction(&Instruction::End); // loop
+        func.instruction(&Instruction::End); // block
+        
+        // If negative, prepend '-'
+        func.instruction(&Instruction::LocalGet(3));
+        func.instruction(&Instruction::If(BlockType::Empty));
+        {
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::I32Add);
+            func.instruction(&Instruction::LocalSet(4));
+            
+            func.instruction(&Instruction::I32Const(buffer + 10));
+            func.instruction(&Instruction::LocalGet(4));
+            func.instruction(&Instruction::I32Sub);
+            func.instruction(&Instruction::I32Const(45)); // '-'
+            func.instruction(&Instruction::I32Store8(wasm_encoder::MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+        }
+        func.instruction(&Instruction::End);
+    }
+    func.instruction(&Instruction::End);
+    
+    // iovec.buf_ptr: for zero case it's buffer, otherwise it's (buffer + 11 - idx)
+    func.instruction(&Instruction::I32Const(0x1000)); // iovec location
+    func.instruction(&Instruction::I32Const(buffer + 11));
+    func.instruction(&Instruction::LocalGet(4));
+    func.instruction(&Instruction::I32Sub);
+    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    
+    // iovec.buf_len = idx
+    func.instruction(&Instruction::I32Const(0x1004));
+    func.instruction(&Instruction::LocalGet(4));
+    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    
+    // Call fd_write(1, 0x1000, 1, 0x1008)
+    func.instruction(&Instruction::I32Const(1));      // stdout fd
+    func.instruction(&Instruction::I32Const(0x1000)); // iovec ptr
+    func.instruction(&Instruction::I32Const(1));      // iovs_len
+    func.instruction(&Instruction::I32Const(0x1008)); // nwritten ptr
+    func.instruction(&Instruction::Call(wasi_fd_write));
+    func.instruction(&Instruction::Drop);             // drop errno
+    
+    // Return self
     func.instruction(&Instruction::LocalGet(0));
     func.instruction(&Instruction::End);
 

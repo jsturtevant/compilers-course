@@ -229,7 +229,6 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     
     // Only create table if we have functions to put in it
     if !table_functions.is_empty() {
-        eprintln!("DEBUG: Element section functions: {:?}", table_functions);
         let table_size = table_functions.len() as u32;
         module.init_table(table_size, Some(table_size));
         module.add_element_section(&table_functions);
@@ -262,18 +261,14 @@ pub fn emit_module(program: &LirProgram, hir: &ir::hir::HirProgram) -> Result<Ve
     // Then, create user-defined vtables
     for vtable in &program.vtables {
         ctx.register_vtable_address(vtable.class_name.clone(), vtable_offset);
-        eprintln!("DEBUG: Class {} vtable at {:#x}", vtable.class_name, vtable_offset);
         
         // Build vtable data: array of function table indices
         let mut vtable_data = Vec::new();
-        for (slot, method_name) in vtable.methods.iter().enumerate() {
+        for method_name in &vtable.methods {
             // Find the index in the function table (not the function index)
             let table_idx = if let Some(func_idx) = ctx.get_function(method_name) {
-                let idx = table_functions.iter().position(|&f| f == func_idx).unwrap_or(0) as u32;
-                eprintln!("DEBUG:   slot {} = {} -> func {} -> table {}", slot, method_name, func_idx, idx);
-                idx
+                table_functions.iter().position(|&f| f == func_idx).unwrap_or(0) as u32
             } else {
-                eprintln!("DEBUG:   slot {} = {} -> NOT FOUND", slot, method_name);
                 0
             };
             vtable_data.extend_from_slice(&table_idx.to_le_bytes());

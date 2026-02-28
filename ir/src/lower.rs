@@ -78,11 +78,39 @@ impl LoweringContext {
         // Don't clear attribute_offsets - they persist for the whole class
     }
     
-    /// Set up attribute offsets for a class
-    fn setup_attributes(&mut self, class: &HirClass) {
+    /// Set up attribute offsets for a class (including inherited attributes)
+    fn setup_attributes(&mut self, class: &HirClass, program: &HirProgram) {
         self.attribute_offsets.clear();
         // Object header is 12 bytes (class_tag: 4, size: 4, vtable_ptr: 4)
         let mut offset = 12u32;
+        
+        // First, get inherited attributes by walking up the parent chain
+        let mut ancestor_attrs: Vec<(String, u32)> = Vec::new();
+        let mut current_parent = class.parent.clone();
+        while let Some(ref parent_name) = current_parent {
+            // Skip builtin classes (Object, IO, String, Int, Bool - they don't have user attributes)
+            if matches!(parent_name.as_str(), "Object" | "IO" | "String" | "Int" | "Bool") {
+                break;
+            }
+            // Find the parent class in the program
+            if let Some(parent_class) = program.classes.iter().find(|c| &c.name == parent_name) {
+                // Prepend parent's attributes (they come first in memory layout)
+                for attr in parent_class.attributes.iter().rev() {
+                    ancestor_attrs.insert(0, (attr.name.clone(), 0)); // offset will be calculated
+                }
+                current_parent = parent_class.parent.clone();
+            } else {
+                break;
+            }
+        }
+        
+        // Add inherited attributes first (with calculated offsets)
+        for (attr_name, _) in &ancestor_attrs {
+            self.attribute_offsets.insert(attr_name.clone(), offset);
+            offset += 4;
+        }
+        
+        // Then add this class's own attributes
         for attr in &class.attributes {
             self.attribute_offsets.insert(attr.name.clone(), offset);
             offset += 4; // Each attribute is 4 bytes (i32 pointer)
@@ -104,17 +132,47 @@ impl LoweringContext {
                 .map(|m| m.name.clone())
                 .collect();
             self.class_methods.insert(class.name.clone(), methods);
-            
-            // Build class metadata for new expression
+        }
+        
+        // Build class metadata for new expression (need second pass to resolve inherited attrs)
+        for class in &program.classes {
             let mut offset = 12u32; // Object header is 12 bytes
             let mut attrs = Vec::new();
+            
+            // First, collect inherited attributes by walking up the parent chain
+            let mut ancestor_attrs: Vec<HirAttribute> = Vec::new();
+            let mut current_parent = class.parent.clone();
+            while let Some(ref parent_name) = current_parent {
+                // Skip builtin classes
+                if matches!(parent_name.as_str(), "Object" | "IO" | "String" | "Int" | "Bool") {
+                    break;
+                }
+                if let Some(parent_class) = program.classes.iter().find(|c| &c.name == parent_name) {
+                    // Prepend parent's attributes
+                    for attr in parent_class.attributes.iter().rev() {
+                        ancestor_attrs.insert(0, attr.clone());
+                    }
+                    current_parent = parent_class.parent.clone();
+                } else {
+                    break;
+                }
+            }
+            
+            // Add inherited attributes first
+            for attr in &ancestor_attrs {
+                attrs.push((attr.name.clone(), attr.typ.clone(), offset, attr.init.clone()));
+                offset += 4;
+            }
+            
+            // Then add this class's own attributes
             for attr in &class.attributes {
                 attrs.push((attr.name.clone(), attr.typ.clone(), offset, attr.init.clone()));
                 offset += 4; // Each attribute is 4 bytes
             }
+            
             self.class_metadata.insert(class.name.clone(), ClassMetadata {
                 class_tag: class.class_tag,
-                object_size: offset, // 12 + 4*num_attributes
+                object_size: offset, // 12 + 4*num_attributes (including inherited)
                 attributes: attrs,
             });
         }
@@ -236,8 +294,8 @@ impl LoweringContext {
         
         // Lower each class
         for class in &program.classes {
-            // Set up attribute offsets for this class
-            self.setup_attributes(class);
+            // Set up attribute offsets for this class (including inherited)
+            self.setup_attributes(class, program);
 
             // Lower each method to a function
             for method in &class.methods {
