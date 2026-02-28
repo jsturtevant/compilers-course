@@ -3,11 +3,11 @@
 //! This module converts from the intermediate representation (LIR)
 //! to WASM instructions using wasm-encoder.
 
+use crate::runtime::{add_runtime, RuntimeFunctions};
 use crate::wasm::WasmModule;
-use crate::runtime::add_runtime;
 use ir::lir::*;
-use wasm_encoder::{Function, Instruction, ValType};
 use std::collections::HashMap;
+use wasm_encoder::{Function, Instruction, ValType};
 
 /// Emit context for tracking function-local state during code generation
 pub struct EmitContext {
@@ -17,16 +17,24 @@ pub struct EmitContext {
     label_depths: HashMap<String, u32>,
     /// Current label depth
     current_depth: u32,
+    /// Runtime function indices
+    runtime: RuntimeFunctions,
 }
 
 impl EmitContext {
-    /// Create a new emission context
-    pub fn new() -> Self {
+    /// Create a new emission context with runtime function indices
+    pub fn new(runtime: RuntimeFunctions) -> Self {
         Self {
             function_map: HashMap::new(),
             label_depths: HashMap::new(),
             current_depth: 0,
+            runtime,
         }
+    }
+
+    /// Get runtime function indices
+    pub fn runtime(&self) -> &RuntimeFunctions {
+        &self.runtime
     }
 
     /// Register a function name -> index mapping
@@ -60,14 +68,28 @@ impl EmitContext {
 
 impl Default for EmitContext {
     fn default() -> Self {
-        Self::new()
+        // Create dummy runtime for default (shouldn't be used in practice)
+        Self::new(RuntimeFunctions {
+            alloc: 0,
+            object_abort: 0,
+            object_type_name: 0,
+            object_copy: 0,
+            io_out_string: 0,
+            io_out_int: 0,
+            io_in_string: 0,
+            io_in_int: 0,
+            string_length: 0,
+            string_concat: 0,
+            string_substr: 0,
+            wasi_fd_write: 0,
+            wasi_fd_read: 0,
+        })
     }
 }
 
 /// Emit a complete WASM module from LIR program
 pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
     let mut module = WasmModule::new();
-    let mut ctx = EmitContext::new();
 
     // Initialize memory (1 page = 64KB for static data + heap)
     module.init_memory(16); // 16 pages = 1MB
@@ -76,12 +98,15 @@ pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
     module.export_memory("memory");
 
     // Add runtime functions (Object, IO, String)
-    let _runtime = add_runtime(&mut module);
+    let runtime = add_runtime(&mut module);
+    
+    let mut ctx = EmitContext::new(runtime);
 
     // Register all program functions first (for call references)
     for (i, func) in program.functions.iter().enumerate() {
         // Runtime functions take first indices, so offset by runtime count
-        let func_idx = (i + 11) as u32; // 11 runtime functions (2 WASI + 9 COOL)
+        // 2 WASI imports + 1 alloc + 3 Object + 4 IO + 3 String = 13 functions
+        let func_idx = (i + 13) as u32;
         ctx.register_function(func.name.clone(), func_idx);
     }
 
@@ -105,9 +130,23 @@ pub fn emit_module(program: &LirProgram) -> Result<Vec<u8>, String> {
         module.add_code(wasm_func);
     }
 
-    // Export Main_main as _start (WASI entry point)
+    // Create _start wrapper function for WASI
+    // WASI requires _start to have signature () -> ()
     if let Some(main_idx) = ctx.get_function("Main_main") {
-        module.export_function("_start", main_idx);
+        let start_type = module.add_type(vec![], vec![]);
+        let start_idx = module.add_function(start_type);
+        
+        let mut start_func = Function::new([]);
+        // Allocate a Main object (stub for now - just use null/0)
+        start_func.instruction(&Instruction::I32Const(0));
+        // Call Main.main() - it takes self and returns i32
+        start_func.instruction(&Instruction::Call(main_idx));
+        // Drop the return value
+        start_func.instruction(&Instruction::Drop);
+        start_func.instruction(&Instruction::End);
+        
+        module.add_code(start_func);
+        module.export_function("_start", start_idx);
     }
 
     // TODO: Emit vtables in data section
@@ -241,9 +280,8 @@ fn emit_instruction(func: &mut Function, ctx: &EmitContext, instr: &LirInstr) ->
         }
 
         LirInstr::Alloc => {
-            // TODO: Implement allocator call
-            // For now, just push a dummy pointer
-            func.instruction(&Instruction::I32Const(0x10000));
+            // Call allocator function (size is on stack)
+            func.instruction(&Instruction::Call(ctx.runtime().alloc));
         }
 
         LirInstr::Label(_label) => {
@@ -333,7 +371,23 @@ mod tests {
 
     #[test]
     fn test_emit_context() {
-        let mut ctx = EmitContext::new();
+        // Create a dummy runtime
+        let runtime = crate::runtime::RuntimeFunctions {
+            alloc: 2,
+            object_abort: 3,
+            object_type_name: 4,
+            object_copy: 5,
+            io_out_string: 6,
+            io_out_int: 7,
+            io_in_string: 8,
+            io_in_int: 9,
+            string_length: 10,
+            string_concat: 11,
+            string_substr: 12,
+            wasi_fd_write: 0,
+            wasi_fd_read: 1,
+        };
+        let mut ctx = EmitContext::new(runtime);
         ctx.register_function("test_func".to_string(), 42);
         assert_eq!(ctx.get_function("test_func"), Some(42));
     }

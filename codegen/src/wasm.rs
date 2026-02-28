@@ -4,9 +4,9 @@
 //! section management, type tracking, and export handling.
 
 use wasm_encoder::{
-    CodeSection, DataSection, ElementSection, ExportKind, ExportSection, Function,
-    FunctionSection, GlobalSection, ImportSection, MemorySection, MemoryType, Module, StartSection,
-    TableSection, TableType, TypeSection, ValType,
+    CodeSection, ConstExpr, DataSection, ElementSection, ExportKind, ExportSection, Function,
+    FunctionSection, GlobalSection, GlobalType, ImportSection, MemorySection, MemoryType, Module,
+    StartSection, TableSection, TableType, TypeSection, ValType,
 };
 
 /// WASM module builder for COOL programs
@@ -144,6 +144,20 @@ impl WasmModule {
             0,
             &wasm_encoder::ConstExpr::i32_const(offset as i32),
             data,
+        );
+    }
+
+    /// Add a global variable
+    ///
+    /// Creates a mutable or immutable global with an initial value.
+    pub fn add_global(&mut self, val_type: ValType, mutable: bool, init_value: i32) {
+        self.globals.global(
+            GlobalType {
+                val_type,
+                mutable,
+                shared: false,
+            },
+            &ConstExpr::i32_const(init_value),
         );
     }
 

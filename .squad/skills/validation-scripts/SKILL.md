@@ -81,9 +81,10 @@ Create a validation script when:
 
 ## Current Scripts
 
-| Phase | Script | External Tool |
-|-------|--------|---------------|
-| Lexer | `run-lexer-all.sh` | — |
-| Parser | `run-parser-all.sh` | — |
-| Semantic | `run-semant-all.sh` | — |
-| Codegen | `run-codegen-all.sh` | `wasm-tools` |
+| Phase | Script | External Tool | Validates |
+|-------|--------|---------------|-----------|
+| Lexer | `run-lexer-all.sh` | — | Token output |
+| Parser | `run-parser-all.sh` | — | AST structure |
+| Semantic | `run-semant-all.sh` | — | Type checking |
+| Codegen | `run-codegen-all.sh` | `wasm-tools` | WASM structure |
+| Runtime | `run-wasmtime-all.sh` | `wasmtime` | WASM execution |

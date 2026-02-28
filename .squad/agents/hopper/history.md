@@ -386,3 +386,77 @@ cargo test -p semant     # ✅ 29/29 tests pass
 - Add error recovery (continue checking after first error)
 
 ---
+
+### Runtime Implementation - Object, String, and Allocator (2026-02-27)
+
+**Task:** Implement Object class methods, String class methods, and memory allocator for COOL→WASM compiler.
+
+**Implementation Details:**
+
+1. **Bump Allocator**
+   - Added global heap pointer (starts at 1KB = 0x400)
+   - Implements 4-byte alignment: `(size + 3) & ~3`
+   - Signature: `alloc(size: i32) -> i32`
+   - Returns pointer to allocated memory, updates heap pointer atomically
+
+2. **Object Class Methods**
+   - `abort()` → Uses WASM `unreachable` instruction for immediate termination
+   - `type_name()` → Stub (returns null); TODO: implement class name table lookup
+   - `copy()` → Full implementation:
+     - Reads object size from header (offset 4)
+     - Allocates new object via alloc()
+     - Copies bytes word-by-word (4 bytes at a time) using loop
+
+3. **String Class Methods**
+   - String layout: `[class_tag:i32, size:i32, vtable:i32, length:i32, data:u8...]`
+   - Data stored inline starting at offset 16
+   - `length()` → Loads length from offset 12
+   - `concat(s: String)` → Full implementation:
+     - Allocates new string with combined length
+     - Copies both string data byte-by-byte
+     - Sets up proper header (class_tag, size, vtable, length)
+   - `substr(i: Int, l: Int)` → Full implementation:
+     - Bounds checking simplified (assumes valid input for MVP)
+     - Allocates substring with proper length
+     - Copies substring data starting from offset i
+
+4. **Module Integration**
+   - Added `add_global()` method to `WasmModule` for global variables
+   - Updated `RuntimeFunctions` struct to include `alloc` field
+   - Modified `EmitContext` to store runtime function indices
+   - Fixed function index offset: 13 runtime functions (2 WASI + 1 alloc + 3 Object + 4 IO + 3 String)
+   - Updated `LirInstr::Alloc` emission to call allocator function
+
+**Files Modified:**
+- `codegen/src/wasm.rs` - Added `add_global()` method and ConstExpr import
+- `codegen/src/runtime.rs` - Implemented allocator, Object methods, String methods (~635 lines)
+- `codegen/src/emit.rs` - Updated EmitContext with runtime, fixed function indexing
+
+**Testing:**
+- ✅ `cargo test -p codegen` - All 5 tests pass
+- ✅ `./scripts/run-codegen-all.sh` - All 18 samples produce valid WASM (262-739 bytes)
+- ✅ wasm-tools validation passes for all samples
+
+**Key Debugging:**
+- Initial failure: forgot to update `add_string_substr` from stub to full implementation
+- Function indexing error: initially used 12 instead of 13 for offset (miscounted runtime functions)
+- Allocator validated in isolation using WAT format before integration
+
+**Technical Decisions:**
+- Object layout: `[class_tag, size, vtable_ptr, attributes...]` at offsets 0, 4, 8, 12+
+- String data inline (not pointer-based) for simplicity
+- Loops use Block/Loop/BrIf(1) pattern for break-on-condition
+- Memory copies done byte-by-byte for strings, word-by-word for objects
+- No bounds checking in substr (trust LIR/semantic analysis)
+
+**Integration Points:**
+- Allocator is now properly wired into LIR `Alloc` instruction emission
+- Runtime functions accessible via `EmitContext.runtime()`
+- All string/object operations ready for use by generated code
+
+**Next Steps:**
+- Implement `type_name()` with class metadata table
+- Add IO implementation (Ritchie's task - WASI fd_read/fd_write)
+- Bounds checking for string operations (optional enhancement)
+- Garbage collection (future work - currently arena allocation only)
+
