@@ -20,7 +20,7 @@ cargo build -p codegen --quiet
 # Create output directory
 OUTPUT_DIR="/tmp/cool-wasm-output"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXAMPLES_DIR="$SCRIPT_DIR/../cool-support/examples"
+EXAMPLES_DIR="$SCRIPT_DIR/../samples"
 mkdir -p "$OUTPUT_DIR"
 
 PASSED=0
@@ -55,7 +55,7 @@ run_with_input() {
     return 1
 }
 
-for cl_file in cool-support/examples/*.cl; do
+for cl_file in samples/*.cl; do
     filename=$(basename "$cl_file" .cl)
     wasm_file="$OUTPUT_DIR/${filename}.wasm"
     

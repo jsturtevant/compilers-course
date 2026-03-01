@@ -3,7 +3,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-EXAMPLES_DIR="$ROOT_DIR/cool-support/examples"
+EXAMPLES_DIR="$ROOT_DIR/samples"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'

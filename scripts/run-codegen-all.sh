@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SAMPLES_DIR="$PROJECT_ROOT/cool-support/examples"
+SAMPLES_DIR="$PROJECT_ROOT/samples"
 OUTPUT_DIR="/tmp/cool-wasm-output"
 
 # Colors
@@ -35,9 +35,18 @@ echo ""
 echo "Running codegen on all samples..."
 echo "================================="
 
+# Files that require multiple source files
+SKIP_FILES="atoi_test"
+
 for cl_file in "$SAMPLES_DIR"/*.cl; do
     filename=$(basename "$cl_file" .cl)
     wasm_file="$OUTPUT_DIR/$filename.wasm"
+    
+    # Skip files that depend on other source files (tested separately)
+    if echo "$SKIP_FILES" | grep -qw "$filename"; then
+        continue
+    fi
+    
     TOTAL=$((TOTAL + 1))
     
     # Try to compile

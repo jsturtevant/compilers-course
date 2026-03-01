@@ -6,14 +6,13 @@
 # Compiles .cl files to .wasm and validates them.
 #
 # Usage: ./scripts/validate-wasm.sh
-# Or:    ./scripts/validate-wasm.sh cool-support/examples/arith.cl
+# Or:    ./scripts/validate-wasm.sh samples/arith.cl
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-COOL_SUPPORT="$ROOT_DIR/cool-support"
-EXAMPLES_DIR="$COOL_SUPPORT/examples"
+SAMPLES_DIR="$ROOT_DIR/samples"
 
 # Colors for output
 RED='\033[0;31m'
@@ -112,7 +111,7 @@ main() {
             else
                 failed=$((failed + 1))
             fi
-        done < <(find "$EXAMPLES_DIR" -name "*.cl" -type f -print0 | sort -z)
+        done < <(find "$SAMPLES_DIR" -name "*.cl" -type f -print0 | sort -z)
     fi
     
     # Summary

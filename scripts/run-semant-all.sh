@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-EXAMPLES_DIR="$PROJECT_ROOT/cool-support/examples"
+EXAMPLES_DIR="$PROJECT_ROOT/samples"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -19,8 +19,17 @@ passed=0
 failed=0
 total=0
 
+# Files that require multiple source files (depend on other .cl files)
+SKIP_FILES="atoi_test.cl"
+
 for file in "$EXAMPLES_DIR"/*.cl; do
     filename=$(basename "$file")
+    
+    # Skip files that depend on other source files
+    if echo "$SKIP_FILES" | grep -qw "$filename"; then
+        continue
+    fi
+    
     total=$((total + 1))
     
     if cargo run -p semant --quiet -- "$file" > /dev/null 2>&1; then
