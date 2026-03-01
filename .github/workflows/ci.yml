@@ -170,7 +170,7 @@ jobs:
     
     - name: Install wasmtime
       run: |
-        curl https://wasmtime.dev/install.sh -sSf | bash
+        curl https://wasmtime.dev/install.sh -sSf | bash -s -- --version v29.0.1
         echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
     
     - name: Run WASM codegen tests
